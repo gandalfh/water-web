@@ -6,10 +6,10 @@ Buy yourself an Arduino Uno + magnometer or two and a Raspberry Pi.  Run nodejs 
 
 ### Parts List
 - Ardunio Uno R3
-  - RS485 Shield
+  - RS485 Shield or breakout
   - Magnometer Breakout (you can hook up more than 1 to see which brand works the best)
 - Raspberry Pi
-  - RS485 Shield
+  - RS485 Shield or breakout
 
 ### Example
 Connect Install the RS485 shields on the Raspberry Pi and Arduno Uno and connect your Magnometer(s) to the Arduno Uno R3, the connect the two wires for the two RS485 shields so that the Arduino can send data to the Raspberry Pi.
