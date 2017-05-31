@@ -14,11 +14,13 @@ Buy yourself an Arduino Uno + magnometer or two and a Raspberry Pi.  Run nodejs 
 ### Example
 Connect Install the RS485 shields on the Raspberry Pi and Arduno Uno and connect your Magnometer(s) to the Arduno Uno R3, the connect the two wires for the two RS485 shields so that the Arduino can send data to the Raspberry Pi.
 
-After cloning this project run node in the node folder
+After cloning this project run node in the node folder on your raspberry pi
 
 ``
 node index.js
 ``
+
+Navigate to localhost:8081 to view the node website
 
 Then run watermonitor.py  (it has to run as sudo because it accesses serial ports)
 
