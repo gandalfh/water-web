@@ -26,6 +26,8 @@ Then run watermonitor.py  (it has to run as sudo because it accesses serial port
 sudo python watermonitor.py
 ``
 
-Then compile and download the Arduino code.  
+Then compile and download the Arduino code that is under serialdatacollector/arduinocode/WaterMeter
 
 If you got everything connected right, watermonitor.py will start printing out readings for each magnometer every 3 seconds.  If you have problems, start out by using your multimeter to make sure you are getting the correct voltage on each component.  Also, sometimes magnometers come DOA, so order a couple extra.
+
+Getting your RS485 shield serial port to work on the raspberry pi can be tricky as it involves editing some linux configuration files, different steps for different versions of raspian, etc.  I had to look at my shield vendor's writeup and do some googling to figure it out, good luck!
