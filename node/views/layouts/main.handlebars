@@ -1,0 +1,687 @@
+<html>
+  <head>
+	<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <!--Load the AJAX API-->
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript" src="/data/jquery-3.2.1.min.js"></script>
+	<script type="text/javascript" src="/data/jquery.simple.websocket.js"></script>
+	<script type="text/javascript" src="/data/moment.js"></script>
+	<link rel="stylesheet" href="/data/bootstrap.min.css">
+	<link href="https://gitcdn.github.io/bootstrap-toggle/2.2.2/css/bootstrap-toggle.min.css" rel="stylesheet">
+	<script src="https://gitcdn.github.io/bootstrap-toggle/2.2.2/js/bootstrap-toggle.min.js"></script>	
+	<!--<script src="//maxcdn.bootstrapcdn.com/bootstrap/3.3.1/js/bootstrap.min.js"></script>	-->
+	<link rel="stylesheet" href="data/dashboard.css" >
+    <script type="text/javascript">
+
+	// Load the Visualization API and the corechart package.
+	google.charts.load('current', {'packages':['corechart']});
+
+	// Set a callback to run when the Google Visualization API is loaded.
+	google.charts.setOnLoadCallback(getData);
+	var loc = window.location;
+	
+	var webSocket = $.simpleWebSocket({ url: 'ws://' + loc.hostname +':8080/' });
+	
+	var lastUpdate = new Date();
+	// reconnected listening
+	webSocket.listen(function(message) {
+		console.log(message.text);
+		//realTimeData = $.parseJSON(message.text);
+		if ($('#realtime_text_Mag3110').length > 0) {
+			lastUpdate = new Date();
+			setRealTimeText(message);
+		}
+	});
+	
+	var dailySprinklerAnalysis = {};
+	var comparativeChart;
+	
+	function buildSprinklerAnalysis() {
+		var processedFiles = 0;
+		for(var i = 0; i < availableFiles.length; i++) {
+			if (availableFiles[i].indexOf('Mag9Dof-XYZ') > 0) {
+				$.getJSON('data/' + availableFiles[i], function(waterData) {
+					buildSprinklerAnalysisFromData(waterData);
+				}).done(function() {
+					console.log( "second success" );
+				})
+				.fail(function(err) {
+					console.log( "error" + err );
+				})
+				.always(function() {
+					console.log( "complete" );
+				});			
+				processedFiles = processedFiles + 1;
+			}
+			if (processedFiles > 10) {
+				break;
+			}
+		}
+	}
+	
+	function buildSprinklerAnalysisFromData(waterData) {
+	
+	
+		consolidatedData = {}
+		for (var index = 0; index < waterData.WaterStats.WaterStat.length; index++)	{
+			row = waterData.WaterStats.WaterStat[index];
+			if (row.interval == 900) {
+				if (!consolidatedData[row.localTime]) {
+					consolidatedData[row.localTime] = { localTime: row.localTime, x: 0, y: 0, z: 0 };
+				}
+				if (row.name=="X") {
+					consolidatedData[row.localTime].x = row.adjustedAverage;
+				}
+				else if (row.name=="Y") {
+					consolidatedData[row.localTime].y = row.adjustedAverage;
+				}
+				else if (row.name=="Z") {
+					consolidatedData[row.localTime].z = row.adjustedAverage;
+				}
+			}
+		}
+		
+		sortedDates = []
+		for(key in consolidatedData){
+			sortedDates.push(key);
+		}
+		
+		sortedDates.sort();
+		var currentDate = null;
+		var countForDate = 0;
+		var includedDates = {};
+		
+		for (var index = 0; index < sortedDates.length; index++) {
+			var date = safariCompatibleDateTimeParse(sortedDates[index]);
+			var dateOnly = new moment(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+			if (!currentDate) {
+				currentDate = dateOnly;
+			}
+			
+			 if (!dateOnly.isSame(currentDate, 'day')) {
+				if (countForDate >= (24*60/15-1)) {
+					includedDates[dateOnly]=dateOnly.format("YYYY-MM-DD");
+				}
+				countForDate=0;
+				currentDate = dateOnly;
+			}
+			countForDate = countForDate + 1;
+		}
+		
+		for (var index = 0; index < sortedDates.length; index++) {
+			var rowDateOnly = safariCompatibleDateTimeParse(sortedDates[index]);
+			rowDateOnly = new moment(new Date(rowDateOnly.getFullYear(), rowDateOnly.getMonth(), rowDateOnly.getDate()));
+			
+			for(key in includedDates){
+				var includedDate = new moment(key);
+				if (rowDateOnly.isSame(includedDate, 'day')) {
+					var rowDateKey = rowDateOnly.format("YYYY-MM-DD");
+					if (!(rowDateKey in dailySprinklerAnalysis)) {
+						dailySprinklerAnalysis[rowDateKey] = {
+							comparativeDate: rowDateKey,
+							sprinklers: {}
+						};
+						
+						for(var i = 0; i < sprinklerSchedule.length; i++) {
+							dailySprinklerAnalysis[rowDateKey].sprinklers[sprinklerSchedule[i].name]= {x: 0, y: 0, z: 0};
+						}
+					}
+					var row = consolidatedData[sortedDates[index]];
+					for(var i = 0; i < sprinklerSchedule.length; i++) {
+						var sprinkler = sprinklerSchedule[i];
+						var rowDate = safariCompatibleDateTimeParse(row.localTime);
+						if (isDateTimeInSprinklerSchedule(rowDate, sprinkler)) {
+							var sprinklerComparativeRecord = dailySprinklerAnalysis[rowDateKey].sprinklers[sprinkler.name];
+							sprinklerComparativeRecord.x += parseInt(row.x);
+							sprinklerComparativeRecord.y += parseInt(row.y);
+							sprinklerComparativeRecord.z += parseInt(row.z);
+						}
+					}
+				}
+			}
+		}
+		
+		var options = createBaseChartStyle("Comparative Sprinkler Usage");
+		
+		// Create the data table.
+		var data = new google.visualization.DataTable();
+		data.addColumn('string', 'DateTime');
+		for(var i = 0; i < sprinklerSchedule.length; i++) {
+			data.addColumn('number', sprinklerSchedule[i].name);
+		}
+		
+		// Set chart options
+		options.isStacked = true;
+		
+		for(var key in dailySprinklerAnalysis) {
+			var comparativeRow = dailySprinklerAnalysis[key];
+			var chartRow=[comparativeRow.comparativeDate];
+			for(var i = 0; i < sprinklerSchedule.length; i++) {
+				var sprinklerData = comparativeRow.sprinklers[sprinklerSchedule[i].name];
+				chartRow.push(sprinklerData.x); 
+			}
+			data.addRows([chartRow]);
+		}
+		
+		data.sort([{column: 0}]);
+
+		// Instantiate and draw our chart, passing in some options.
+		if (!comparativeChart)
+			comparativeChart = new google.visualization.ColumnChart(document.getElementById('chart_div_comparative'));
+		comparativeChart.draw(data, options);
+	}
+	
+	var sprinklerSchedule = [{ name: 'Avocado 1', valve: 1, controller: 'Left Back Porch', durationMinutes: 120, startTime: '10:00', endTime: '12:00', days: 'MonTueWedThuFriSatSun' },
+{ name: 'Avocado 2', valve: 2, controller: 'Left Back Porch', durationMinutes: 60, startTime: '15:00', endTime: '16:00', days: 'MonWedSat' },
+{ name: 'Ice Hill', valve: 3, controller: 'Left Back Porch', durationMinutes: 15, startTime: '12:00', endTime: '12:15', days: 'Mon' },
+{ name: 'Pallets', valve: 1, controller: 'Right Back Porch', durationMinutes: 10, startTime: '20:00', endTime: '20:10', days: 'Mon' },
+{ name: 'Aloe Top', valve: 2, controller: 'Right Back Porch', durationMinutes: 9, startTime: '03:00', endTime: '03:09', days: 'MonWedFriSun' },
+{ name: 'Fruit Trees', valve: 3, controller: 'Right Back Porch', durationMinutes: 15, startTime: '04:00', endTime: '04:15', days: 'TueWedFriSatSun' },
+{ name: 'Front Aloe', valve: 4, controller: 'Right Back Porch', durationMinutes: 15, startTime: '05:00', endTime: '05:15', days: 'MonFri' },
+{ name: 'Fallen Trunk', valve: 1, controller: 'Tool Room', durationMinutes: 15, startTime: '13:00', endTime: '13:15', days: 'MonWedFri' },
+{ name: 'Right Front', valve: 2, controller: 'Tool Room', durationMinutes: 15, startTime: '23:00', endTime: '23:15', days: 'Sun' }]
+	
+	setInterval(function() {
+		if ($('#realtime_text_Mag3110').length > 0) {
+			var nowDate = new Date();
+			if ((nowDate - lastUpdate)/1000 > 6) {
+				lastUpdate = new Date();
+				$.getJSON('realTimeMagneticReading', function(message) {
+					for(obj in message) {
+						setRealTimeText(message[obj]);
+					}
+				});
+			}
+		}
+	}, 500);
+
+	
+	var realTimeCharts = {};
+	
+	function createBaseChartStyle(title) {
+		return {	'title': title,
+					'height': 650,
+					backgroundColor: {fill:'black'},
+					hAxis: {textStyle:{color: '#FFF'}},
+					vAxis: {textStyle:{color: '#FFF'}},
+					legendTextStyle: { color: '#FFF' },
+					titleTextStyle: { color: '#FFF' }
+				};
+	}
+	function createRealTimeChartStyle() {
+		var realTimeChartOptions = createBaseChartStyle('');
+		delete realTimeChartOptions.width;
+		delete realTimeChartOptions.height;
+		return 	realTimeChartOptions	
+	}
+	function setRealTimeText(message) {
+	
+		$('#realtime_text_'+message.magName).text(message.magName + ' x: ' + Math.round(message.x) + ' y: ' + Math.round(message.y) + ' z: ' + Math.round(message.z));
+		
+		var dt = new Date();
+		realtimeData = realTimeDatas[message.magName];
+		var chartRow = [dt.getHours().pad() + ':' + dt.getMinutes().pad() + ':' + dt.getSeconds().pad()];
+		chartRow.push(parseInt(message.x));
+		chartRow.push(parseInt(message.y));
+		chartRow.push(parseInt(message.z));
+		
+		realtimeData.addRows([chartRow]);
+		while (realtimeData.getNumberOfRows() > 20) {
+			realtimeData.removeRow(0);
+		}
+		
+		if (!realTimeCharts[message.magName]) {
+			// Instantiate and draw our chart, passing in some options.
+			realTimeCharts[message.magName] = new google.visualization.ColumnChart(document.getElementById('realtime_chart_'+message.magName));
+		}
+		// Set chart options
+		var realTimeChartOptions = createRealTimeChartStyle();
+		
+		realTimeCharts[message.magName].draw(buildRealTimeDataView(realtimeData), realTimeChartOptions);	
+	}
+	
+	function buildRealTimeDataView(dataTable) {
+		var view = new google.visualization.DataView(dataTable);
+		var columns = [0];
+		columns.push(1);
+		columns.push(2);
+		columns.push(3);
+		
+		view.setColumns(columns);
+		return view;		
+	}		
+	
+	function buildDataView(dataTable) {
+		var view = new google.visualization.DataView(dataTable);
+		var columns = [0];
+		if ($('#showXToggle').is(':checked')) {
+			columns.push(1);
+		}
+		if ($('#showYToggle').is(':checked')) {
+			columns.push(2);
+		}
+		if ($('#showZToggle').is(':checked')) {
+			columns.push(3);
+		}
+		
+		if ($('#showSprinklersToggle').is(':checked')) {
+			for(var i = 0; i < sprinklerSchedule.length; i++) {
+				columns.push(4+i);
+			}
+		}
+		
+		view.setColumns(columns);
+		return view;
+	}
+	
+	
+	var availableFiles=[];
+	$(document).ready(function() {
+	  {{#each files}}
+		availableFiles.push('{{this.fileName}}');
+	  {{/each}}
+	});
+	
+	var realTimeDatas = {};
+	
+	var charts = {};
+	
+	function addAxisColumnsToDataObject(dataTableObject) {
+		dataTableObject.addColumn('number', 'X', 'XValues');
+		dataTableObject.addColumn('number', 'Y', 'YValues');
+		dataTableObject.addColumn('number', 'Z', 'ZValues');
+	}
+	
+	function getData() {
+		realtimeData = new google.visualization.DataTable();
+		realtimeData.addColumn('string', 'DateTime');
+		addAxisColumnsToDataObject(realtimeData);
+		realTimeDatas["Mag3110"] = realtimeData;
+		realtimeData = new google.visualization.DataTable();
+		realtimeData.addColumn('string', 'DateTime');
+		addAxisColumnsToDataObject(realtimeData);
+		realTimeDatas["Mag9Dof"] = realtimeData;
+		
+	  buildSprinklerAnalysis();
+	  
+	  var jsonFile = '{{jsonFile}}';
+	  {{#each files}}
+	    {{#if @first}}
+		if (!jsonFile) {
+			 jsonFile = '{{this.fileName}}'
+		}
+		lastJsonFile = jsonFile;
+		 
+		
+		
+		$.getJSON('data/' + jsonFile, function(waterData) {
+			lastWaterData = waterData;
+			charts["60"] = drawChart(waterData, 60, 'chart_div_60', jsonFile + ' Magnetic Field Strength Change by Minute');
+			charts["900"] = drawChart(waterData, 900, 'chart_div_900', jsonFile + ' Magnetic Field Strength Change by 15 Minute');
+			charts["3600"] = drawChart(waterData, 3600, 'chart_div_3600', jsonFile + ' Magnetic Field Strength Change by Hour');
+			}).done(function() {
+				console.log( "second success" );
+			  })
+			  .fail(function(err) {
+				console.log( "error" + err );
+			  })
+			  .always(function() {
+				console.log( "complete" );
+			});			
+			
+	    {{/if}}
+	  {{/each}}
+	}
+
+var lastWaterData;
+var lastJsonFile;
+
+	function updateCharts(jsonFile) {
+		lastJsonFile = jsonFile;
+		$.getJSON('data/' + jsonFile, function(waterData) {
+			lastWaterData = waterData;
+			updateChartsFromData(waterData, jsonFile);
+		});
+	}
+	
+	function updateChartsFromData(waterData, jsonFile) {
+		if (!jsonFile) {
+			jsonFile = lastJsonFile;
+		}
+		
+		updateChart(waterData, '60', jsonFile + ' Magnetic Field Strength Change by Minute');
+		updateChart(waterData, '900', jsonFile + ' Magnetic Field Strength Change by 15 Minute');
+		updateChart(waterData, '3600', jsonFile + ' Magnetic Field Strength Change by Hour');
+	}
+	
+	function updateChart(waterData, interval, title) {
+			var dataTable = charts[interval].dataTable;
+			dataTable.removeRows(0, dataTable.getNumberOfRows());
+			copyWaterDataToChartData(waterData, interval, dataTable);
+			charts[interval].options.title = title;
+			charts[interval].chart.draw(buildDataView(dataTable), charts[interval].options);
+	}
+	
+	function isDateTimeInSprinklerSchedule(rowDate, sprinkler) {
+		var startTime = new moment(sprinkler.startTime, 'HH:mm');
+		
+		var dateAndSprinklerStartTime = rowDate.getFullYear() + '-' + (rowDate.getMonth()+1) + '-' + rowDate.getDate().pad()  + ' ' + startTime.get('hour').pad() + ':' + startTime.get('minute').pad();
+		var momentRowDate = moment(rowDate, 'YYYY-MM-DD  HH:mm:ss');
+		var duration = moment.duration(sprinkler.duration, 'minutes');
+		var momentSprinklerStartDateTime = new moment(dateAndSprinklerStartTime, 'YYYY-MM-DD  HH:mm');
+		var rowDayOfWeek = momentSprinklerStartDateTime.format('ddd');
+		
+		if (sprinkler.days.indexOf(rowDayOfWeek) >= 0) {
+			var momentSprinklerEndDateTime = new moment(dateAndSprinklerStartTime, 'YYYY-MM-DD  HH:mm');
+			momentSprinklerEndDateTime.add(sprinkler.durationMinutes, 'm');
+			
+			if ((momentRowDate.isAfter(momentSprinklerStartDateTime) || momentRowDate.isSame(momentSprinklerStartDateTime, 'second'))  
+			&&  (momentRowDate.isBefore(momentSprinklerEndDateTime) || momentRowDate.isSame(momentSprinklerEndDateTime, 'second')))
+			{
+				return true;
+			}
+		}
+	}
+	
+	function copyWaterDataToChartData(waterData, interval, chartData) {
+		consolidatedData = {}
+		for (var index = 0; index < waterData.WaterStats.WaterStat.length; index++)	{
+			row = waterData.WaterStats.WaterStat[index];
+			if (row.interval == interval) {
+				if (!consolidatedData[row.localTime]) {
+					consolidatedData[row.localTime] = { localTime: row.localTime, x: 0, y: 0, z: 0 };
+				}
+				if (row.name=="X") {
+					if ($('#showAdustedToggle').is(':checked')) {
+						consolidatedData[row.localTime].x = row.adjustedAverage;
+					} else {
+						consolidatedData[row.localTime].x = row.average;
+					}
+				}
+				else if (row.name=="Y") {
+					if ($('#showAdustedToggle').is(':checked')) {
+						consolidatedData[row.localTime].y = row.adjustedAverage;
+					} else {
+						consolidatedData[row.localTime].y = row.average;
+					}
+				}
+				else if (row.name=="Z") {
+					if ($('#showAdustedToggle').is(':checked')) {
+						consolidatedData[row.localTime].z = row.adjustedAverage;
+					} else {
+						consolidatedData[row.localTime].z = row.average;
+					}
+				}
+			}
+		}
+		
+		sortedDates = []
+		for(key in consolidatedData){
+			sortedDates.push(key);
+		}
+		
+		sortedDates.sort();
+
+		for (var index = 0; index < sortedDates.length; index++) {
+			row = consolidatedData[sortedDates[index]];
+			var chartRow = [formatDateTime(row.localTime, interval), parseInt(row.x), parseInt(row.y), parseInt(row.z)];
+			
+			for(var i = 0; i < sprinklerSchedule.length; i++) {
+				var sprinkler = sprinklerSchedule[i];
+				var rowDate = new Date(row.localTime);
+				var sprinklerValue = 0;
+				if (isDateTimeInSprinklerSchedule(rowDate, sprinkler)) {
+					if ($('#useSprinklerXToggle').is(':checked')) {
+						sprinklerValue += parseInt(row.x);
+					}
+					if ($('#useSprinklerYToggle').is(':checked')) {
+						sprinklerValue += parseInt(row.y);
+					}
+					if ($('#useSprinklerZToggle').is(':checked')) {
+						sprinklerValue += parseInt(row.z);
+					}
+				}
+				
+				chartRow.push(sprinklerValue);
+			}
+			
+			chartData.addRows([chartRow]);
+		}	
+	}
+
+	// Callback that creates and populates a data table,
+	// instantiates the pie chart, passes in the data and
+	// draws it.
+	
+	function drawChart(waterData, interval, div_id, chartTitle) {
+
+		// Create the data table.
+		var data = new google.visualization.DataTable();
+		data.addColumn('string', 'DateTime');
+		data.addColumn('number', 'X');
+		data.addColumn('number', 'Y');
+		data.addColumn('number', 'Z');
+		
+		for(var i = 0; i < sprinklerSchedule.length; i++) {
+			var sprinkler = sprinklerSchedule[i];
+			data.addColumn('number', sprinkler.name, sprinkler.name);
+		}			
+		
+		copyWaterDataToChartData(waterData, interval, data);
+		// Set chart options
+		var options = createBaseChartStyle(chartTitle);
+		options.isStacked = $('#showSprinklersToggle').is(':checked');
+
+		// Instantiate and draw our chart, passing in some options.
+		var chart = new google.visualization.ColumnChart(document.getElementById(div_id));
+		chart.draw(buildDataView(data), options);
+		return {chart:chart, dataTable:data, options:options};
+	}
+	function safariCompatibleDateTimeParse(dateTimeString) {
+		var t = dateTimeString.split(/[- :]/);
+		return new Date(t[0], t[1]-1, t[2], t[3], t[4], t[5]);
+	}
+	function formatDateTime(dateTimeString, interval) {
+		
+		var dt = safariCompatibleDateTimeParse(dateTimeString);
+		if (interval == 60) {
+			return (dt.getMonth()+1) + '-' + dt.getDate().pad() +' ' + dt.getHours().pad() + ':' + dt.getMinutes().pad();
+		}
+		if (interval == 900) {
+			return (dt.getMonth())+1 + '-' + dt.getDate().pad() +' ' + dt.getHours().pad() + ':' + dt.getMinutes().pad();
+		}
+		if (interval == 3600) {
+			return dt.getMonth()+1 + '-' + dt.getDate().pad() + ' ' + dt.getHours().pad() +'h'
+		}
+		if (interval == 86400) {
+			return dt.getMonth()+1 + '-' + dt.getDate().pad();
+		}
+	}
+	
+function containsColumn(dataTable, columnId) {
+	for(var i = 0; i  < dataTable.getNumberOfColumns(); i++) {
+		if (dataTable.getColumnId(i) === columnId) {
+			return true;
+		}
+	}
+	
+	return false;
+}
+	
+	
+Number.prototype.pad = function(size) {
+      var s = String(this);
+      while (s.length < (size || 2)) {s = "0" + s;}
+      return s;
+    }
+
+	  function onNavClick(clickedLink) {
+	  		$(".nav-link").removeClass("active");
+			clickedLink.addClass("active");
+
+	  }
+	  
+var rtime;
+var timeout = false;
+var delta = 200;
+$(window).resize(function() {
+    rtime = new Date();
+    if (timeout === false) {
+        timeout = true;
+        setTimeout(resizeend, delta);
+    }
+});
+
+function resizeend() {
+    if (new Date() - rtime < delta) {
+        setTimeout(resizeend, delta);
+    } else {
+        timeout = false;
+		redrawRealtimeCharts();
+    }               
+}
+
+function redrawRealtimeCharts() {
+	for(var chartKey in realTimeCharts) {
+		realTimeCharts[chartKey].draw(buildRealTimeDataView(realTimeDatas[chartKey]), createRealTimeChartStyle());
+	}
+}
+
+function redrawStaticCharts() {
+	for(var chartKey in charts) {
+		charts[chartKey].options.isStacked = $('#showSprinklersToggle').is(':checked');
+		
+		charts[chartKey].chart.draw(buildDataView(charts[chartKey].dataTable),charts[chartKey].options);
+	}
+}	  
+
+function redrawCharts() {
+	redrawRealtimeCharts();
+	redrawStaticCharts();
+}
+	
+    </script>
+	
+	
+  </head>
+
+	<body >
+		<nav class="navbar navbar-toggleable-md navbar-inverse fixed-top bg-inverse" >
+		<button class="navbar-toggler navbar-toggler-right hidden-lg-up" type="button" data-toggle="collapse" data-target="#navbarsExampleDefault" aria-controls="navbarsExampleDefault" aria-expanded="false" aria-label="Toggle navigation">
+			<span class="navbar-toggler-icon"></span>
+		</button>
+		  <a class="navbar-brand" href="#">Water Web Dashboard</a>
+
+		  <div class="collapse navbar-collapse" id="navbarsExampleDefault">
+			<ul class="navbar-nav mr-auto">
+			  <li class="nav-item active">
+				<a class="nav-link" href="#">Home <span class="sr-only">(current)</span></a>
+			  </li>
+				<div class="dropdown">
+				  <button class="btn btn-primary dropdown-toggle" type="button" data-toggle="dropdown">Datasets
+				  <span class="caret"></span></button>
+				  <ul class="dropdown-menu">
+					{{#each files}}
+					<li>
+					  <a class="{{#if @first}}active{{/if}}" href="javascript:void(0)" onclick="onNavClick($(this)); updateCharts('{{this.fileName}}');" >{{this.fileTitle}}</a>
+					</li>
+					{{/each}}			  
+				  </ul>
+				</div>			  
+			  <!--<li class="nav-item">
+				<a class="nav-link" href="#">Help</a>
+			  </li>-->
+			</ul>
+		  </div>
+		</nav>
+	
+		<div class="container-fluid">
+		  <div class="row">
+			<nav class="col-sm-3 col-md-2 hidden-xs-down sidebar">
+			  <ul class="nav nav-pills flex-column">
+			  <li class="nav-item ">
+				<input type="checkbox" checked data-toggle="toggle" data-on="X Shown" data-off="X Hidden" id="showXToggle" onchange="redrawCharts();" />
+			  </li>
+			  <li class="nav-item ">
+				<input type="checkbox" checked data-toggle="toggle" data-on="Y Shown" data-off="Y Hidden" id="showYToggle" onchange="redrawCharts();" />
+			  </li>
+			  <li class="nav-item ">
+				<input type="checkbox" checked data-toggle="toggle" data-on="Z Shown" data-off="Z Hidden" id="showZToggle" onchange="redrawCharts();" />
+			  </li>
+			  <li class="nav-item ">
+				<input type="checkbox" checked data-toggle="toggle" data-on="Adusted Values" data-off="Raw Values" id="showAdustedToggle" onchange="updateChartsFromData(lastWaterData);" />
+			  </li>	
+			  <li class="nav-item ">
+				<input type="checkbox" checked data-toggle="toggle" data-on="Sprinklers Shown" data-off="Sprinklers Hidden" id="showSprinklersToggle" onchange="redrawCharts();" /><br>
+				<input type="checkbox" checked data-toggle="toggle" data-on="X" data-off="X" id="useSprinklerXToggle" onchange="updateChartsFromData(lastWaterData);" />
+				<input type="checkbox" checked data-toggle="toggle" data-on="Y" data-off="Y" id="useSprinklerYToggle" onchange="updateChartsFromData(lastWaterData);" />
+				<input type="checkbox" checked data-toggle="toggle" data-on="Z" data-off="Z" id="useSprinklerZToggle" onchange="updateChartsFromData(lastWaterData);" />
+			  </li>	
+		  
+
+			 <!-- <ul class="nav nav-pills flex-column">
+				<li class="nav-item">
+				  <a class="nav-link" href="#">Nav item again</a>
+				</li>
+				<li class="nav-item">
+				  <a class="nav-link" href="#">One more nav</a>
+				</li>
+				<li class="nav-item">
+				  <a class="nav-link" href="#">Another nav item</a>
+				</li>
+			  </ul>-->
+			</nav>
+
+			<main class="col-sm-9 offset-sm-3 col-md-10 offset-md-2 pt-3">
+			  <h1>Water Web Dashboard</h1>
+			  <p>A website devoted to Gandalf & Stryder Hudlow's water meter monitoring experiment; using a Raspberry Pi, Arduino and a Magnometer or two</p>
+			  <section class="row text-center placeholders">
+				<div class="col-6 col-sm-5 placeholder">
+				  <div id = "realtime_chart_Mag3110" width="600" height="300">
+				  </div>
+				  <h4>Mag3110</h4>
+				  <div class="text-muted">Realtime Readings</div>
+						<p id="realtime_text_Mag3110">Waiting for Mag3110  device data</p>
+				</div>
+				<div class="col-6 col-sm-5 placeholder">
+				  <div id = "realtime_chart_Mag9Dof" width="600" height="300">
+				  </div>
+				  <h4>Mag9DOF</h4>
+				  <div class="text-muted">Realtime Readings</div>
+						<p id="realtime_text_Mag9Dof">Waiting for 9Dof device data</p>
+				</div>
+			  </section>
+
+			  <h2>Water Activity Metrics</h2>
+			  <section class="row text-center placeholders">
+				<div class="col-10 col-lg-10 placeholder">
+					<div id="chart_div_comparative" >
+					</div>
+				</div>
+			  </section>
+			  <section class="row text-center placeholders">
+				<div class="col-10 col-lg-10 placeholder">
+					<div id="chart_div_900" >
+					</div>
+				</div>
+			  </section>
+			  <section class="row text-center placeholders">
+				<div class="col-10 col-lg-10 placeholder">
+					<div id="chart_div_3600" >
+					</div>
+				</div>
+			  </section>
+			  <section class="row text-center placeholders">
+				<div class="col-10 col-lg-10 placeholder">
+					<div id="chart_div_60" >
+					</div>
+				</div>
+			  </section>
+
+			 </main>
+		 </div>
+		</div>
+		<script src="/data/tether.min.js" ></script>
+		<script src="/data/bootstrap.min.js" ></script>
+	</body>
+</html>

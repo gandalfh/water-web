@@ -1,0 +1,17 @@
+{
+  "name": "water-web",
+  "version": "1.0.0",
+  "description": "Water Monitoring Website",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Gandalf Hudlow",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.17.1",
+    "express": "^4.15.2",
+    "express-handlebars": "^3.0.0",
+    "nodejs-websocket": "^1.7.1"
+  }
+}
