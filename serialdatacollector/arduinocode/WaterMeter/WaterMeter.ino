@@ -1,4 +1,16 @@
-#include "./MD5.h"
+#include <ESP8266WiFi.h>
+#include <ESP8266WiFiAP.h>
+#include <ESP8266WiFiGeneric.h>
+#include <ESP8266WiFiMulti.h>
+#include <ESP8266WiFiScan.h>
+#include <ESP8266WiFiSTA.h>
+#include <ESP8266WiFiType.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <WiFiServer.h>
+#include <WiFiUdp.h>
+
+ #include "./MD5.h"
 
 #include "./LSM9DS1_Registers.h"
 #include "./LSM9DS1_Types.h"
@@ -6,6 +18,7 @@
 #include <SoftwareSerial.h>
 
 #include <Wire.h>
+
 
 class MagnometerBase 
 {
@@ -332,10 +345,15 @@ void setup() {
   }
 
   pinMode(LED_BUILTIN, OUTPUT);
-  
+
+  const char* ssid = "inglewood2";
+  const char* password = "G4nd4lf0nl1n3";
+
+  WiFi.begin(ssid, password);
 }
 
 unsigned long previousPublishMs = 0;
+bool wifiConnected = false;
 
 void loop()
 {
@@ -348,6 +366,8 @@ void loop()
 
 
   unsigned long currentMillis = millis();
+  WiFiEspClient client;
+  
   if ((unsigned long)(currentMillis - previousPublishMs) >= 3000) 
   {
     previousPublishMs = currentMillis;
@@ -360,6 +380,21 @@ void loop()
       line += ',' + String(md5str) + '\n';
       free(hash);
       free(md5str);
+      if (wifiConnected) {
+        IPAddress server(192,168,1,20);
+        String PostData = '{name: "' + magnometers[i]->Name + '", ' + 'x: ' + String(magnometers[i]->GetTotalXDelta()) + ', y: ' + String(magnometers[i]->GetTotalYDelta()) + ', z: ' + String(magnometers[i]->GetTotalZDelta()) + ' }';
+        if (client.connect(server, 8082)) {
+          client.println("POST http://192.168.1.20/putMagneticReading HTTP/1.1");
+          client.println("Host: 192.168.1.20:8082");
+          client.println("Accept: */*");
+          client.println("Content-Length: " + PostData.length());
+          client.println("Content-Type: application/json");
+          client.println();
+          client.println(PostData);          
+        }
+
+      }
+      
       mySerial.print(line);
       Serial.println(line);
       magnometers[i]->ResetCalculations();
@@ -369,6 +404,15 @@ void loop()
   delay(5);
   
   digitalWrite(LED_BUILTIN, LOW);
+
+  if(wifiConnected != (WiFi.status() == WL_CONNECTED)) {
+    wifiConnected = WiFi.status() == WL_CONNECTED;
+    if (wifiConnected) 
+      Serial.print("Wifi connected");
+     else
+      Serial.print("Wifi disconnected");
+  }
+
 
 }
  

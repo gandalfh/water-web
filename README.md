@@ -22,7 +22,7 @@ node index.js
 
 Navigate to localhost:8081 to view the node website
 
-Then run watermonitor.py  (it has to run as sudo because it accesses serial ports)
+Then run watermonitor.py  (it has to run as sudo because it accesses serial port)
 
 ``
 sudo python watermonitor.py
