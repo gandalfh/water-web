@@ -1,3 +1,6 @@
+#include <Time.h>
+#include <TimeLib.h>
+
 #include <ESP8266WiFi.h>
 #include <ESP8266WiFiAP.h>
 #include <ESP8266WiFiGeneric.h>
@@ -19,6 +22,158 @@
 
 #include <Wire.h>
 
+time_t RoundTime(time_t time, unsigned int intervalSeconds)
+{
+  return time % intervalSeconds;
+}
+
+class Rollup {
+  public:
+  unsigned int total;
+  unsigned int sampleCount;
+  unsigned int startTicks;
+  unsigned int intervalSeconds;
+  bool active;
+  time_t startTime;
+
+  Rollup()
+  {
+    active = 0;
+    Reset();
+  }
+  void Reset() {
+    startTime = 0;
+    total = 0;
+    sampleCount = 0;
+    startTicks = millis();
+    startTime = RoundTime(now(), intervalSeconds);
+  }
+  void AddMeasure(unsigned int value) {
+    total += value;
+    sampleCount++;
+  }
+};
+
+class Rollups {
+  Rollup *rollups;
+  unsigned int intervalSeconds;
+  unsigned int currentRollupIndex;
+  unsigned int rollupCount;
+  
+  public:
+  Rollups(unsigned int intervalSeconds, const unsigned int rollupCount) 
+  {
+    this->intervalSeconds = intervalSeconds;
+    this->rollupCount = rollupCount;
+    rollups = new Rollup[rollupCount];
+    for(int i = 0; i < rollupCount; i++) {
+      rollups[i].intervalSeconds = intervalSeconds;
+    }
+    currentRollupIndex = 0;
+  }
+  
+  void AddMeasure(unsigned int value) {
+    Rollup *rollup = &rollups[currentRollupIndex];
+    if (now() > rollup->startTime + intervalSeconds) {
+      currentRollupIndex = (currentRollupIndex + 1) % rollupCount;
+      rollup = &rollups[currentRollupIndex];
+      rollup->Reset();
+      rollup->active = 0;
+    }
+    rollup->AddMeasure(value);
+  }
+};
+
+
+class NTPSynch 
+{
+  unsigned int lastTimeSynch;
+  unsigned int lastRequest;
+  enum TymeSynchState 
+  {
+    WaitingForNextSynch,
+    WaitingForResponse,
+  };
+  WiFiUDP udp;
+  unsigned int state;
+  public:
+  NTPSynch() 
+  {
+    lastTimeSynch = 0;
+    state = WaitingForNextSynch;
+  }
+
+  
+  
+  void loop()
+  {
+    switch(state)
+    {
+      case WaitingForNextSynch:
+        if (lastTimeSynch == 0 || (millis() - lastTimeSynch > 2*60*1000))
+        {
+            const char* ntpServerName = "time.nist.gov";
+            IPAddress timeServerIP;
+            WiFi.hostByName(ntpServerName, timeServerIP);
+            sendNTPpacket(timeServerIP); // send an NTP packet to a time server
+            state = WaitingForResponse;
+            lastRequest = millis();
+        }
+        break;
+      case WaitingForResponse:
+        handleResponse();  
+        break;
+    }
+  }
+  #define NTP_PACKET_SIZE 48 
+  byte packetBuffer[ NTP_PACKET_SIZE]; // NTP time stamp is in the first 48 bytes of the message
+  void handleResponse()
+  {
+    if (millis() - lastRequest > 500) 
+    {
+      int cb = udp.parsePacket();
+      if (cb) {
+        udp.read(packetBuffer, NTP_PACKET_SIZE);
+        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+        unsigned long secsSince1900 = highWord << 16 | lowWord;      
+        const unsigned long seventyYears = 2208988800UL;
+        unsigned long epoch = secsSince1900 - seventyYears;
+        setTime(epoch);
+        lastTimeSynch = millis();
+      }
+      else if (millis() - lastRequest > 10000)
+      {
+        state = WaitingForNextSynch;
+        return;
+      }
+    }
+  }
+  
+  unsigned long sendNTPpacket(IPAddress& address)
+  {
+    Serial.println("sending NTP packet...");
+    // set all bytes in the buffer to 0
+    memset(packetBuffer, 0, NTP_PACKET_SIZE);
+    // Initialize values needed to form NTP request
+    // (see URL above for details on the packets)
+    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+    packetBuffer[1] = 0;     // Stratum, or type of clock
+    packetBuffer[2] = 6;     // Polling Interval
+    packetBuffer[3] = 0xEC;  // Peer Clock Precision
+    // 8 bytes of zero for Root Delay & Root Dispersion
+    packetBuffer[12]  = 49;
+    packetBuffer[13]  = 0x4E;
+    packetBuffer[14]  = 49;
+    packetBuffer[15]  = 52;
+  
+    // all NTP fields have been given values, now
+    // you can send a packet requesting a timestamp:
+    udp.beginPacket(address, 123); //NTP requests are to port 123
+    udp.write(packetBuffer, NTP_PACKET_SIZE);
+    udp.endPacket();
+  }  
+};
 
 class MagnometerBase 
 {
@@ -366,7 +521,6 @@ void loop()
 
 
   unsigned long currentMillis = millis();
-  WiFiEspClient client;
   
   if ((unsigned long)(currentMillis - previousPublishMs) >= 3000) 
   {
