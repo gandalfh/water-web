@@ -98,9 +98,9 @@
 				currentDate = dateOnly;
 			}
 			
-			 if (!dateOnly.isSame(currentDate, 'day')) {
-				if (countForDate >= (24*60/15-1)) {
-					includedDates[dateOnly]=dateOnly.format("YYYY-MM-DD");
+			 if (!dateOnly.isSame(currentDate, 'day') || index == sortedDates.length - 1) {
+				if (countForDate >= (24*60/15-5)) {
+					includedDates[dateOnly]=dateOnly;
 				}
 				countForDate=0;
 				currentDate = dateOnly;
@@ -113,7 +113,7 @@
 			rowDateOnly = new moment(new Date(rowDateOnly.getFullYear(), rowDateOnly.getMonth(), rowDateOnly.getDate()));
 			
 			for(key in includedDates){
-				var includedDate = new moment(key);
+				var includedDate = includedDates[key];
 				if (rowDateOnly.isSame(includedDate, 'day')) {
 					var rowDateKey = rowDateOnly.format("YYYY-MM-DD");
 					if (!(rowDateKey in dailySprinklerAnalysis)) {

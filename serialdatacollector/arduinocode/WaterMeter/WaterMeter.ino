@@ -1,5 +1,10 @@
+/*#include <WiFiEsp.h>
+#include <WiFiEspClient.h>
+#include <WiFiEspServer.h>
+#include <WiFiEspUdp.h>*/
+
 #include <ESP8266WiFi.h>
-#include <ESP8266WiFiAP.h>
+/*#include <ESP8266WiFiAP.h>
 #include <ESP8266WiFiGeneric.h>
 #include <ESP8266WiFiMulti.h>
 #include <ESP8266WiFiScan.h>
@@ -8,7 +13,7 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFiServer.h>
-#include <WiFiUdp.h>
+#include <WiFiUdp.h>*/
 
  #include "./MD5.h"
 
@@ -334,9 +339,11 @@ MagnometerBase *magnometers[] = { &magnometer3110, &magnometer9Dof};
 SoftwareSerial mySerial(3,2);
 
 
+
+
 void setup() {
   mySerial.begin (57600);
-  Serial.begin(9600);
+  Serial.begin(115200);
   Wire.begin();        // join i2c bus (address optional for master)
 
   for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
@@ -345,11 +352,9 @@ void setup() {
   }
 
   pinMode(LED_BUILTIN, OUTPUT);
-
-  const char* ssid = "inglewood2";
-  const char* password = "G4nd4lf0nl1n3";
-
-  WiFi.begin(ssid, password);
+  
+  
+  
 }
 
 unsigned long previousPublishMs = 0;
@@ -366,7 +371,6 @@ void loop()
 
 
   unsigned long currentMillis = millis();
-  WiFiEspClient client;
   
   if ((unsigned long)(currentMillis - previousPublishMs) >= 3000) 
   {
@@ -380,20 +384,7 @@ void loop()
       line += ',' + String(md5str) + '\n';
       free(hash);
       free(md5str);
-      if (wifiConnected) {
-        IPAddress server(192,168,1,20);
-        String PostData = '{name: "' + magnometers[i]->Name + '", ' + 'x: ' + String(magnometers[i]->GetTotalXDelta()) + ', y: ' + String(magnometers[i]->GetTotalYDelta()) + ', z: ' + String(magnometers[i]->GetTotalZDelta()) + ' }';
-        if (client.connect(server, 8082)) {
-          client.println("POST http://192.168.1.20/putMagneticReading HTTP/1.1");
-          client.println("Host: 192.168.1.20:8082");
-          client.println("Accept: */*");
-          client.println("Content-Length: " + PostData.length());
-          client.println("Content-Type: application/json");
-          client.println();
-          client.println(PostData);          
-        }
-
-      }
+      PublishToWifi(magnometers[i]);
       
       mySerial.print(line);
       Serial.println(line);
@@ -405,6 +396,29 @@ void loop()
   
   digitalWrite(LED_BUILTIN, LOW);
 
+  CheckWifiStatus();
+
+}
+
+unsigned long previousWifiAttempt = 0;
+int wifiRadioStatus = WL_IDLE_STATUS;    
+
+void CheckWifiStatus() 
+{
+  if ((unsigned long)(millis() - previousWifiAttempt) >= 10000) 
+  {  
+    previousWifiAttempt = millis();
+    if (wifiRadioStatus != WL_CONNECTED && !wifiConnected) {
+
+      #include "wifipassword.h"
+      Serial.print("Attempting to connect to WPA SSID: ");
+      Serial.println(ssid);
+      
+      // Connect to WPA/WPA2 network
+      wifiRadioStatus = WiFi.begin(ssid, password);
+    }
+  }
+  
   if(wifiConnected != (WiFi.status() == WL_CONNECTED)) {
     wifiConnected = WiFi.status() == WL_CONNECTED;
     if (wifiConnected) 
@@ -412,8 +426,32 @@ void loop()
      else
       Serial.print("Wifi disconnected");
   }
+}
 
+#define ClientDebug(s) client.println(s); Serial.println(s);
+void PublishToWifi(MagnometerBase *pMag)
+{
+      if (wifiConnected) {
+         WiFiClient client;
+        
+        IPAddress server(192,168,1,20);
+        String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
+        if (client.connect(server, 8081)) {
+           Serial.print("client connected");
 
+          ClientDebug("PUT /putMagneticReading HTTP/1.1");
+          //ClientDebug("Host: 192.168.1.20:8081"); 
+          
+          ClientDebug("Accept: */*");
+          ClientDebug("Content-Type: application/json");
+          ClientDebug("Content-Length: " + String(PostData.length()));
+          ClientDebug("");
+          ClientDebug(PostData);
+          delay(100);          
+        }
+        else
+          Serial.print("client not connected");
+      }
 }
  
 /*void loop9dof()

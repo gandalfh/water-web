@@ -44,6 +44,15 @@ app.post('/realTimeMagneticReading', function(request, response){
 	}
 });
 
+app.put('/putMagneticReading', function(request, response){
+		console.log('put received' + request.body);
+	if (request.body.apiKey === 'opensecret') {
+		delete request.body.apiKey;
+	}
+	//response.send(request.body);
+});
+
+
 app.get('/jsonToXml', function(req,res) { 
 	console.log('converting json file ' + req.query.jsonFile);
     fs.readFile(__dirname + '/data/' + req.query.jsonFile, 'utf8', function (err, data) {
