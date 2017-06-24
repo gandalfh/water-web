@@ -1,17 +1,11 @@
+#include <WiFiEsp.h>
+#include <WiFiEspClient.h>
+#include <WiFiEspServer.h>
+#include <WiFiEspUdp.h>
 #include <Time.h>
 #include <TimeLib.h>
 
 #include <ESP8266WiFi.h>
-#include <ESP8266WiFiAP.h>
-#include <ESP8266WiFiGeneric.h>
-#include <ESP8266WiFiMulti.h>
-#include <ESP8266WiFiScan.h>
-#include <ESP8266WiFiSTA.h>
-#include <ESP8266WiFiType.h>
-#include <WiFiClient.h>
-#include <WiFiClientSecure.h>
-#include <WiFiServer.h>
-#include <WiFiUdp.h>
 
  #include "./MD5.h"
 
@@ -489,9 +483,11 @@ MagnometerBase *magnometers[] = { &magnometer3110, &magnometer9Dof};
 SoftwareSerial mySerial(3,2);
 
 
+
+
 void setup() {
   mySerial.begin (57600);
-  Serial.begin(9600);
+  Serial.begin(115200);
   Wire.begin();        // join i2c bus (address optional for master)
 
   for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
@@ -500,11 +496,9 @@ void setup() {
   }
 
   pinMode(LED_BUILTIN, OUTPUT);
-
-  const char* ssid = "inglewood2";
-  const char* password = "G4nd4lf0nl1n3";
-
-  WiFi.begin(ssid, password);
+  
+  
+  
 }
 
 unsigned long previousPublishMs = 0;
@@ -535,6 +529,7 @@ void loop()
       line += ',' + String(md5str) + '\n';
       free(hash);
       free(md5str);
+<<<<<<< HEAD
       if (wifiConnected) {
         IPAddress server(192,168,1,11);
         WiFiClient client;
@@ -550,6 +545,9 @@ void loop()
         }
 
       }
+=======
+      PublishToWifi(magnometers[i]);
+>>>>>>> b755ad2fc5aefe2bc222d9baed4a4d48c5057c4e
       
       mySerial.print(line);
       Serial.println(line);
@@ -561,6 +559,29 @@ void loop()
   
   digitalWrite(LED_BUILTIN, LOW);
 
+  CheckWifiStatus();
+
+}
+
+unsigned long previousWifiAttempt = 0;
+int wifiRadioStatus = WL_IDLE_STATUS;    
+
+void CheckWifiStatus() 
+{
+  if ((unsigned long)(millis() - previousWifiAttempt) >= 10000) 
+  {  
+    previousWifiAttempt = millis();
+    if (wifiRadioStatus != WL_CONNECTED && !wifiConnected) {
+
+      #include "wifipassword.h"
+      Serial.print("Attempting to connect to WPA SSID: ");
+      Serial.println(ssid);
+      
+      // Connect to WPA/WPA2 network
+      wifiRadioStatus = WiFi.begin(ssid, password);
+    }
+  }
+  
   if(wifiConnected != (WiFi.status() == WL_CONNECTED)) {
     wifiConnected = WiFi.status() == WL_CONNECTED;
     if (wifiConnected) 
@@ -568,171 +589,31 @@ void loop()
      else
       Serial.print("Wifi disconnected");
   }
-
-
-}
- 
-/*void loop9dof()
-{
-  if ( imu.magAvailable() )
-  {
-    // To read from the magnetometer, first call the
-    // readMag() function. When it exits, it'll update the
-    // mx, my, and mz variables with the most current data.
-    imu.readMag();
-    String line = String(imu.mx) + ',' + String(imu.my) + ',' + String(imu.mz);
-    unsigned char *hash = MD5::make_hash(line.c_str());
-    char *md5str = MD5::make_digest(hash, 16);
-    line += ',' + String(md5str) + '\n';
-    free(hash);
-    free(md5str);
-    mySerial.print(line);
-    //Serial.println(line);
-    delay(60);
-  }
-  
 }
 
-void config9dof(void)
+#define ClientDebug(s) client.println(s); Serial.println(s);
+void PublishToWifi(MagnometerBase *pMag)
 {
-  // Before initializing the IMU, there are a few settings
-  // we may need to adjust. Use the settings struct to set
-  // the device's communication mode and addresses:
-  imu.settings.device.commInterface = IMU_MODE_I2C;
-  imu.settings.device.mAddress = LSM9DS1_M;
-  imu.settings.device.agAddress = LSM9DS1_AG;
+      if (wifiConnected) {
+         WiFiClient client;
+        
+        IPAddress server(192,168,1,20);
+        String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
+        if (client.connect(server, 8081)) {
+           Serial.print("client connected");
 
-  if (!imu.begin())
-  {
-    Serial.println("Failed to communicate with LSM9DS1.");
-    Serial.println("Double-check wiring.");
-    Serial.println("Default settings in this sketch will " \
-                  "work for an out of the box LSM9DS1 " \
-                  "Breakout, but may need to be modified " \
-                  "if the board jumpers are.");
-    while (1)
-      ;
-  }
-}*/
-
-
-/*void print_values(void)
-{
-  int x = readx();
-  int y = ready();
-  int z = readz();
-  String line = String(x) + ',' + String(y) + ',' + String(z);
-    unsigned char *hash = MD5::make_hash(line.c_str());
-    char *md5str = MD5::make_digest(hash, 16);
-    line += ',' + String(md5str) + '\n';
-    free(hash);
-    free(md5str);
-  
-  mySerial.print(line);
-  Serial.println(line);
+          ClientDebug("PUT /putMagneticReading HTTP/1.1");
+          //ClientDebug("Host: 192.168.1.20:8081"); 
+          
+          ClientDebug("Accept: */*");
+          ClientDebug("Content-Type: application/json");
+          ClientDebug("Content-Length: " + String(PostData.length()));
+          ClientDebug("");
+          ClientDebug(PostData);
+          delay(100);          
+        }
+        else
+          Serial.print("client not connected");
+      }
 }
-
-int readx(void)
-{
-  int xl, xh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x01);              // x MSB reg
-  Wire.endTransmission();       // stop transmitting
  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    xh = Wire.read(); // receive the byte
-    Serial.println('xh='+String(xh));
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x02);              // x LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    xl = Wire.read(); // receive the byte
-  }
-  
-  int xout = (xl|(xh << 8)); //concatenate the MSB and LSB
-  return xout;
-}
-
-int ready(void)
-{
-  int yl, yh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x03);              // y MSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    yh = Wire.read(); // receive the byte
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x04);              // y LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    yl = Wire.read(); // receive the byte
-  }
-  
-  int yout = (yl|(yh << 8)); //concatenate the MSB and LSB
-  return yout;
-}
-
-int readz(void)
-{
-  int zl, zh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x05);              // z MSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    zh = Wire.read(); // receive the byte
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x06);              // z LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    zl = Wire.read(); // receive the byte
-  }
-  
-  int zout = (zl|(zh << 8)); //concatenate the MSB and LSB
-  return zout;
-}*/
-
-
