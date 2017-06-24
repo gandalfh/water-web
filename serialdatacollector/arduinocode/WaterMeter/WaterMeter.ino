@@ -1,19 +1,11 @@
-/*#include <WiFiEsp.h>
+#include <WiFiEsp.h>
 #include <WiFiEspClient.h>
 #include <WiFiEspServer.h>
-#include <WiFiEspUdp.h>*/
+#include <WiFiEspUdp.h>
+#include <Time.h>
+#include <TimeLib.h>
 
 #include <ESP8266WiFi.h>
-/*#include <ESP8266WiFiAP.h>
-#include <ESP8266WiFiGeneric.h>
-#include <ESP8266WiFiMulti.h>
-#include <ESP8266WiFiScan.h>
-#include <ESP8266WiFiSTA.h>
-#include <ESP8266WiFiType.h>
-#include <WiFiClient.h>
-#include <WiFiClientSecure.h>
-#include <WiFiServer.h>
-#include <WiFiUdp.h>*/
 
  #include "./MD5.h"
 
@@ -24,6 +16,158 @@
 
 #include <Wire.h>
 
+time_t RoundTime(time_t time, unsigned int intervalSeconds)
+{
+  return time % intervalSeconds;
+}
+
+class Rollup {
+  public:
+  unsigned int total;
+  unsigned int sampleCount;
+  unsigned int startTicks;
+  unsigned int intervalSeconds;
+  bool active;
+  time_t startTime;
+
+  Rollup()
+  {
+    active = 0;
+    Reset();
+  }
+  void Reset() {
+    startTime = 0;
+    total = 0;
+    sampleCount = 0;
+    startTicks = millis();
+    startTime = RoundTime(now(), intervalSeconds);
+  }
+  void AddMeasure(unsigned int value) {
+    total += value;
+    sampleCount++;
+  }
+};
+
+class Rollups {
+  Rollup *rollups;
+  unsigned int intervalSeconds;
+  unsigned int currentRollupIndex;
+  unsigned int rollupCount;
+  
+  public:
+  Rollups(unsigned int intervalSeconds, const unsigned int rollupCount) 
+  {
+    this->intervalSeconds = intervalSeconds;
+    this->rollupCount = rollupCount;
+    rollups = new Rollup[rollupCount];
+    for(int i = 0; i < rollupCount; i++) {
+      rollups[i].intervalSeconds = intervalSeconds;
+    }
+    currentRollupIndex = 0;
+  }
+  
+  void AddMeasure(unsigned int value) {
+    Rollup *rollup = &rollups[currentRollupIndex];
+    if (now() > rollup->startTime + intervalSeconds) {
+      currentRollupIndex = (currentRollupIndex + 1) % rollupCount;
+      rollup = &rollups[currentRollupIndex];
+      rollup->Reset();
+      rollup->active = 0;
+    }
+    rollup->AddMeasure(value);
+  }
+};
+
+
+class NTPSynch 
+{
+  unsigned int lastTimeSynch;
+  unsigned int lastRequest;
+  enum TymeSynchState 
+  {
+    WaitingForNextSynch,
+    WaitingForResponse,
+  };
+  WiFiUDP udp;
+  unsigned int state;
+  public:
+  NTPSynch() 
+  {
+    lastTimeSynch = 0;
+    state = WaitingForNextSynch;
+  }
+
+  
+  
+  void loop()
+  {
+    switch(state)
+    {
+      case WaitingForNextSynch:
+        if (lastTimeSynch == 0 || (millis() - lastTimeSynch > 2*60*1000))
+        {
+            const char* ntpServerName = "time.nist.gov";
+            IPAddress timeServerIP;
+            WiFi.hostByName(ntpServerName, timeServerIP);
+            sendNTPpacket(timeServerIP); // send an NTP packet to a time server
+            state = WaitingForResponse;
+            lastRequest = millis();
+        }
+        break;
+      case WaitingForResponse:
+        handleResponse();  
+        break;
+    }
+  }
+  #define NTP_PACKET_SIZE 48 
+  byte packetBuffer[ NTP_PACKET_SIZE]; // NTP time stamp is in the first 48 bytes of the message
+  void handleResponse()
+  {
+    if (millis() - lastRequest > 500) 
+    {
+      int cb = udp.parsePacket();
+      if (cb) {
+        udp.read(packetBuffer, NTP_PACKET_SIZE);
+        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+        unsigned long secsSince1900 = highWord << 16 | lowWord;      
+        const unsigned long seventyYears = 2208988800UL;
+        unsigned long epoch = secsSince1900 - seventyYears;
+        setTime(epoch);
+        lastTimeSynch = millis();
+      }
+      else if (millis() - lastRequest > 10000)
+      {
+        state = WaitingForNextSynch;
+        return;
+      }
+    }
+  }
+  
+  unsigned long sendNTPpacket(IPAddress& address)
+  {
+    Serial.println("sending NTP packet...");
+    // set all bytes in the buffer to 0
+    memset(packetBuffer, 0, NTP_PACKET_SIZE);
+    // Initialize values needed to form NTP request
+    // (see URL above for details on the packets)
+    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+    packetBuffer[1] = 0;     // Stratum, or type of clock
+    packetBuffer[2] = 6;     // Polling Interval
+    packetBuffer[3] = 0xEC;  // Peer Clock Precision
+    // 8 bytes of zero for Root Delay & Root Dispersion
+    packetBuffer[12]  = 49;
+    packetBuffer[13]  = 0x4E;
+    packetBuffer[14]  = 49;
+    packetBuffer[15]  = 52;
+  
+    // all NTP fields have been given values, now
+    // you can send a packet requesting a timestamp:
+    udp.beginPacket(address, 123); //NTP requests are to port 123
+    udp.write(packetBuffer, NTP_PACKET_SIZE);
+    udp.endPacket();
+  }  
+};
 
 class MagnometerBase 
 {
@@ -454,167 +598,3 @@ void PublishToWifi(MagnometerBase *pMag)
       }
 }
  
-/*void loop9dof()
-{
-  if ( imu.magAvailable() )
-  {
-    // To read from the magnetometer, first call the
-    // readMag() function. When it exits, it'll update the
-    // mx, my, and mz variables with the most current data.
-    imu.readMag();
-    String line = String(imu.mx) + ',' + String(imu.my) + ',' + String(imu.mz);
-    unsigned char *hash = MD5::make_hash(line.c_str());
-    char *md5str = MD5::make_digest(hash, 16);
-    line += ',' + String(md5str) + '\n';
-    free(hash);
-    free(md5str);
-    mySerial.print(line);
-    //Serial.println(line);
-    delay(60);
-  }
-  
-}
-
-void config9dof(void)
-{
-  // Before initializing the IMU, there are a few settings
-  // we may need to adjust. Use the settings struct to set
-  // the device's communication mode and addresses:
-  imu.settings.device.commInterface = IMU_MODE_I2C;
-  imu.settings.device.mAddress = LSM9DS1_M;
-  imu.settings.device.agAddress = LSM9DS1_AG;
-
-  if (!imu.begin())
-  {
-    Serial.println("Failed to communicate with LSM9DS1.");
-    Serial.println("Double-check wiring.");
-    Serial.println("Default settings in this sketch will " \
-                  "work for an out of the box LSM9DS1 " \
-                  "Breakout, but may need to be modified " \
-                  "if the board jumpers are.");
-    while (1)
-      ;
-  }
-}*/
-
-
-/*void print_values(void)
-{
-  int x = readx();
-  int y = ready();
-  int z = readz();
-  String line = String(x) + ',' + String(y) + ',' + String(z);
-    unsigned char *hash = MD5::make_hash(line.c_str());
-    char *md5str = MD5::make_digest(hash, 16);
-    line += ',' + String(md5str) + '\n';
-    free(hash);
-    free(md5str);
-  
-  mySerial.print(line);
-  Serial.println(line);
-}
-
-int readx(void)
-{
-  int xl, xh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x01);              // x MSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    xh = Wire.read(); // receive the byte
-    Serial.println('xh='+String(xh));
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x02);              // x LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    xl = Wire.read(); // receive the byte
-  }
-  
-  int xout = (xl|(xh << 8)); //concatenate the MSB and LSB
-  return xout;
-}
-
-int ready(void)
-{
-  int yl, yh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x03);              // y MSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    yh = Wire.read(); // receive the byte
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x04);              // y LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    yl = Wire.read(); // receive the byte
-  }
-  
-  int yout = (yl|(yh << 8)); //concatenate the MSB and LSB
-  return yout;
-}
-
-int readz(void)
-{
-  int zl, zh;  //define the MSB and LSB
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x05);              // z MSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    zh = Wire.read(); // receive the byte
-  }
-  
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.beginTransmission(MAG_ADDR); // transmit to device 0x0E
-  Wire.write(0x06);              // z LSB reg
-  Wire.endTransmission();       // stop transmitting
- 
-  delayMicroseconds(2); //needs at least 1.3us free time between start and stop
-  
-  Wire.requestFrom(MAG_ADDR, 1); // request 1 byte
-  while(Wire.available())    // slave may send less than requested
-  { 
-    zl = Wire.read(); // receive the byte
-  }
-  
-  int zout = (zl|(zh << 8)); //concatenate the MSB and LSB
-  return zout;
-}*/
-
-
