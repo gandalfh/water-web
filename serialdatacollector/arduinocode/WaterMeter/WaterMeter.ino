@@ -521,6 +521,7 @@ void loop()
 
 
   unsigned long currentMillis = millis();
+ 
   
   if ((unsigned long)(currentMillis - previousPublishMs) >= 3000) 
   {
@@ -535,11 +536,12 @@ void loop()
       free(hash);
       free(md5str);
       if (wifiConnected) {
-        IPAddress server(192,168,1,20);
+        IPAddress server(192,168,1,11);
+        WiFiClient client;
         String PostData = '{name: "' + magnometers[i]->Name + '", ' + 'x: ' + String(magnometers[i]->GetTotalXDelta()) + ', y: ' + String(magnometers[i]->GetTotalYDelta()) + ', z: ' + String(magnometers[i]->GetTotalZDelta()) + ' }';
         if (client.connect(server, 8082)) {
-          client.println("POST http://192.168.1.20/putMagneticReading HTTP/1.1");
-          client.println("Host: 192.168.1.20:8082");
+          client.println("POST http://192.168.1.11/putMagneticReading HTTP/1.1");
+          client.println("Host: 192.168.1.11:8082");
           client.println("Accept: */*");
           client.println("Content-Length: " + PostData.length());
           client.println("Content-Type: application/json");
