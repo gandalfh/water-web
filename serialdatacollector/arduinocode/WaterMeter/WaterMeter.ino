@@ -1,11 +1,18 @@
-#include <WiFiEsp.h>
-#include <WiFiEspClient.h>
-#include <WiFiEspServer.h>
-#include <WiFiEspUdp.h>
 #include <Time.h>
 #include <TimeLib.h>
 
 #include <ESP8266WiFi.h>
+#include <ESP8266WiFiAP.h>
+#include <ESP8266WiFiGeneric.h>
+#include <ESP8266WiFiMulti.h>
+#include <ESP8266WiFiScan.h>
+#include <ESP8266WiFiSTA.h>
+#include <ESP8266WiFiType.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <WiFiServer.h>
+#include <WiFiUdp.h>
+
 
  #include "./MD5.h"
 
@@ -529,7 +536,6 @@ void loop()
       line += ',' + String(md5str) + '\n';
       free(hash);
       free(md5str);
-<<<<<<< HEAD
       if (wifiConnected) {
         IPAddress server(192,168,1,11);
         WiFiClient client;
@@ -545,9 +551,8 @@ void loop()
         }
 
       }
-=======
+      
       PublishToWifi(magnometers[i]);
->>>>>>> b755ad2fc5aefe2bc222d9baed4a4d48c5057c4e
       
       mySerial.print(line);
       Serial.println(line);
@@ -597,13 +602,13 @@ void PublishToWifi(MagnometerBase *pMag)
       if (wifiConnected) {
          WiFiClient client;
         
-        IPAddress server(192,168,1,20);
+        IPAddress server(192,168,1,11);
         String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
         if (client.connect(server, 8081)) {
            Serial.print("client connected");
 
           ClientDebug("PUT /putMagneticReading HTTP/1.1");
-          //ClientDebug("Host: 192.168.1.20:8081"); 
+          //ClientDebug("Host: 192.168.1.11:8081"); 
           
           ClientDebug("Accept: */*");
           ClientDebug("Content-Type: application/json");
