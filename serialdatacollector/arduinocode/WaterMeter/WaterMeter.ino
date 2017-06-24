@@ -511,6 +511,36 @@ void setup() {
 unsigned long previousPublishMs = 0;
 bool wifiConnected = false;
 
+#define ClientDebug(s) client.println(s); Serial.println(s);
+
+void PublishToWifi(MagnometerBase *pMag);
+
+void PublishToWifi(MagnometerBase *pMag)
+{
+      if (wifiConnected) {
+         WiFiClient client;
+        
+        IPAddress server(192,168,1,11);
+        String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
+        if (client.connect(server, 8081)) {
+           Serial.print("client connected");
+
+          ClientDebug("PUT /putMagneticReading HTTP/1.1");
+          //ClientDebug("Host: 192.168.1.11:8081"); 
+          
+          ClientDebug("Accept: */*");
+          ClientDebug("Content-Type: application/json");
+          ClientDebug("Content-Length: " + String(PostData.length()));
+          ClientDebug("");
+          ClientDebug(PostData);
+          delay(100);          
+        }
+        else
+          Serial.print("client not connected");
+      }
+}
+ 
+
 void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
@@ -537,22 +567,9 @@ void loop()
       free(hash);
       free(md5str);
       if (wifiConnected) {
-        IPAddress server(192,168,1,11);
-        WiFiClient client;
-        String PostData = '{name: "' + magnometers[i]->Name + '", ' + 'x: ' + String(magnometers[i]->GetTotalXDelta()) + ', y: ' + String(magnometers[i]->GetTotalYDelta()) + ', z: ' + String(magnometers[i]->GetTotalZDelta()) + ' }';
-        if (client.connect(server, 8082)) {
-          client.println("POST http://192.168.1.11/putMagneticReading HTTP/1.1");
-          client.println("Host: 192.168.1.11:8082");
-          client.println("Accept: */*");
-          client.println("Content-Length: " + PostData.length());
-          client.println("Content-Type: application/json");
-          client.println();
-          client.println(PostData);          
-        }
-
+        PublishToWifi(magnometers[i]);
       }
       
-      PublishToWifi(magnometers[i]);
       
       mySerial.print(line);
       Serial.println(line);
@@ -596,29 +613,5 @@ void CheckWifiStatus()
   }
 }
 
-#define ClientDebug(s) client.println(s); Serial.println(s);
-void PublishToWifi(MagnometerBase *pMag)
-{
-      if (wifiConnected) {
-         WiFiClient client;
-        
-        IPAddress server(192,168,1,11);
-        String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
-        if (client.connect(server, 8081)) {
-           Serial.print("client connected");
 
-          ClientDebug("PUT /putMagneticReading HTTP/1.1");
-          //ClientDebug("Host: 192.168.1.11:8081"); 
-          
-          ClientDebug("Accept: */*");
-          ClientDebug("Content-Type: application/json");
-          ClientDebug("Content-Length: " + String(PostData.length()));
-          ClientDebug("");
-          ClientDebug(PostData);
-          delay(100);          
-        }
-        else
-          Serial.print("client not connected");
-      }
-}
- 
+
