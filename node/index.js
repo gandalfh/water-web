@@ -24,32 +24,66 @@ app.get('/realTimeMagneticReading', function(request, response){
 	response.send(JSON.stringify(lastMagneticReadings));
 });
 
-app.post('/realTimeMagneticReading', function(request, response){
-	if (request.body.apiKey === 'opensecret') {
-		delete request.body.apiKey;
-		console.log('post received' + request.body);
-		lastMagneticReading = request.body;
-		lastMagneticReadings[request.body.magName] = request.body;
+function broadcastClients(magneticReading) {
+		lastMagneticReading = magneticReading;
+		lastMagneticReadings[magneticReading.magName] = magneticReading;
 		
 		webSocketServer.connections.forEach(function (conn) {
-				console.log('sending to client: ' + JSON.stringify(request.body));
+				console.log('sending to client: ' + JSON.stringify(magneticReading));
 				try {
-					conn.sendText(JSON.stringify(request.body));
+					conn.sendText(JSON.stringify(magneticReading));
 				} catch (e)
 				{
 					console.log("Erorr while trying to send data to web socket client" + e);
 				}
 			})	
+}
+
+app.post('/realTimeMagneticReading', function(request, response){
+	if (request.body.apiKey === 'opensecret') {
+		delete request.body.apiKey;
+		console.log('post received' + request.body);
+		broadcastClients(request.body);
 		response.send(request.body);    // echo the result back
 	}
 });
 
-app.put('/putMagneticReading', function(request, response){
-		console.log('put received' + request.body);
+app.post('/magneticReading', function(request, response){
+		console.log('putMagneticReading received' + JSON.stringify(request.body));
 	if (request.body.apiKey === 'opensecret') {
 		delete request.body.apiKey;
+		broadcastClients(request.body);
 	}
-	//response.send(request.body);
+	var currentTime = {
+		epoch: Math.floor(new Date().getTime()/1000)	
+	};
+
+	response.send(currentTime);
+});
+
+
+app.put('/magneticMetrics', function(request, response){
+	console.log('Metrics Received' + JSON.stringify(request.body));
+
+    var size = 0;
+	var completedData =[];
+
+    request.on('data', function (data) {
+        size += data.length;
+		completedData.push(data);
+        //console.log('Got chunk: ' + data.length + ' total: ' + size);
+    });
+
+    request.on('end', function () {
+		var metricData = JSON.parse(completedData.join(''));
+		console.log('Data Received: ' + JSON.stringify(metricData));
+        console.log("total size = " + size);
+    }); 
+
+    request.on('error', function(e) {
+        console.log("ERROR ERROR: " + e.message);
+    });
+
 });
 
 

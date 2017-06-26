@@ -33,16 +33,15 @@ class Rollup {
   unsigned int total;
   unsigned int sampleCount;
   unsigned int startTicks;
+  time_t startTime;
   unsigned int intervalSeconds;
   bool active;
-  time_t startTime;
 
   Rollup()
   {
-    active = 0;
-    Reset();
+    active = false;
   }
-  void Reset() {
+  void ResetRollup() {
     startTime = 0;
     total = 0;
     sampleCount = 0;
@@ -55,125 +54,67 @@ class Rollup {
   }
 };
 
-class Rollups {
-  Rollup *rollups;
-  unsigned int intervalSeconds;
-  unsigned int currentRollupIndex;
-  unsigned int rollupCount;
-  
+class RollupsInterface {
   public:
-  Rollups(unsigned int intervalSeconds, const unsigned int rollupCount) 
-  {
-    this->intervalSeconds = intervalSeconds;
-    this->rollupCount = rollupCount;
-    rollups = new Rollup[rollupCount];
-    for(int i = 0; i < rollupCount; i++) {
-      rollups[i].intervalSeconds = intervalSeconds;
-    }
-    currentRollupIndex = 0;
+  RollupsInterface() {
+    
   }
+  virtual void AddMeasure(unsigned int value) 
+  {
   
-  void AddMeasure(unsigned int value) {
-    Rollup *rollup = &rollups[currentRollupIndex];
-    if (now() > rollup->startTime + intervalSeconds) {
-      currentRollupIndex = (currentRollupIndex + 1) % rollupCount;
-      rollup = &rollups[currentRollupIndex];
-      rollup->Reset();
-      rollup->active = 0;
-    }
-    rollup->AddMeasure(value);
+  }
+  virtual Rollup *GetRollup(int rollupIndex) 
+  {
+    
+  }
+  virtual int RollupCount() 
+  {
+    
   }
 };
 
-
-class NTPSynch 
+template <int ROLLUP_COUNT> class Rollups : public RollupsInterface 
 {
-  unsigned int lastTimeSynch;
-  unsigned int lastRequest;
-  enum TymeSynchState 
-  {
-    WaitingForNextSynch,
-    WaitingForResponse,
-  };
-  WiFiUDP udp;
-  unsigned int state;
+  Rollup _rollups[ROLLUP_COUNT];
+  unsigned int _intervalSeconds;
+  unsigned int _currentRollupIndex;
+  
   public:
-  NTPSynch() 
+  Rollups(unsigned int intervalSeconds) 
   {
-    lastTimeSynch = 0;
-    state = WaitingForNextSynch;
+
+    _intervalSeconds = intervalSeconds;
+    
+    for(int i = 0; i < ROLLUP_COUNT; i++) {
+      _rollups[i].intervalSeconds = intervalSeconds;
+    }
+    _currentRollupIndex = 0;
+  }
+  
+  void AddMeasure(unsigned int value) {
+    Rollup *rollup = &_rollups[_currentRollupIndex];
+    if (!rollup->active)
+    {
+      rollup->ResetRollup();
+      rollup->active=true;
+    }
+      
+    if (millis() > rollup->startTicks + _intervalSeconds*1000) {
+      _currentRollupIndex = (_currentRollupIndex + 1) % ROLLUP_COUNT;
+      rollup = &_rollups[_currentRollupIndex];
+      rollup->ResetRollup();
+      rollup->active = true;
+    }
+    rollup->AddMeasure(value);
   }
 
-  
-  
-  void loop()
-  {
-    switch(state)
-    {
-      case WaitingForNextSynch:
-        if (lastTimeSynch == 0 || (millis() - lastTimeSynch > 2*60*1000))
-        {
-            const char* ntpServerName = "time.nist.gov";
-            IPAddress timeServerIP;
-            WiFi.hostByName(ntpServerName, timeServerIP);
-            sendNTPpacket(timeServerIP); // send an NTP packet to a time server
-            state = WaitingForResponse;
-            lastRequest = millis();
-        }
-        break;
-      case WaitingForResponse:
-        handleResponse();  
-        break;
-    }
+  Rollup *GetRollup(int rollupIndex) {
+    return &_rollups[rollupIndex];
   }
-  #define NTP_PACKET_SIZE 48 
-  byte packetBuffer[ NTP_PACKET_SIZE]; // NTP time stamp is in the first 48 bytes of the message
-  void handleResponse()
-  {
-    if (millis() - lastRequest > 500) 
-    {
-      int cb = udp.parsePacket();
-      if (cb) {
-        udp.read(packetBuffer, NTP_PACKET_SIZE);
-        unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
-        unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
-        unsigned long secsSince1900 = highWord << 16 | lowWord;      
-        const unsigned long seventyYears = 2208988800UL;
-        unsigned long epoch = secsSince1900 - seventyYears;
-        setTime(epoch);
-        lastTimeSynch = millis();
-      }
-      else if (millis() - lastRequest > 10000)
-      {
-        state = WaitingForNextSynch;
-        return;
-      }
-    }
+
+  int RollupCount() {
+    return ROLLUP_COUNT;
   }
-  
-  unsigned long sendNTPpacket(IPAddress& address)
-  {
-    Serial.println("sending NTP packet...");
-    // set all bytes in the buffer to 0
-    memset(packetBuffer, 0, NTP_PACKET_SIZE);
-    // Initialize values needed to form NTP request
-    // (see URL above for details on the packets)
-    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
-    packetBuffer[1] = 0;     // Stratum, or type of clock
-    packetBuffer[2] = 6;     // Polling Interval
-    packetBuffer[3] = 0xEC;  // Peer Clock Precision
-    // 8 bytes of zero for Root Delay & Root Dispersion
-    packetBuffer[12]  = 49;
-    packetBuffer[13]  = 0x4E;
-    packetBuffer[14]  = 49;
-    packetBuffer[15]  = 52;
-  
-    // all NTP fields have been given values, now
-    // you can send a packet requesting a timestamp:
-    udp.beginPacket(address, 123); //NTP requests are to port 123
-    udp.write(packetBuffer, NTP_PACKET_SIZE);
-    udp.endPacket();
-  }  
 };
 
 class MagnometerBase 
@@ -207,6 +148,18 @@ private:
   unsigned long _totalXDelta;
   unsigned long _totalYDelta;
   unsigned long _totalZDelta;
+  #define HOURS_KEPT 48
+  #define MEASURE_COUNT 2
+  Rollups<HOURS_KEPT*4> _fifteenMinuteRollups[3] = {
+     Rollups<HOURS_KEPT*4>(900),
+     Rollups<HOURS_KEPT*4>(900),
+     Rollups<HOURS_KEPT*4>(900),
+  };
+  Rollups<HOURS_KEPT> _hourRollups[3] = {
+     Rollups<HOURS_KEPT>(3600),
+     Rollups<HOURS_KEPT>(3600),
+     Rollups<HOURS_KEPT>(3600),
+  };
 
 public:
   virtual void Init() = 0;
@@ -250,6 +203,29 @@ public:
     return _totalZDelta;
   }
 
+  void AddToMetrics() {
+    for (int i = 0; i < 3; i++) {
+      _fifteenMinuteRollups[i].AddMeasure(_totalXDelta);
+      _fifteenMinuteRollups[i].AddMeasure(_totalYDelta);
+      _fifteenMinuteRollups[i].AddMeasure(_totalZDelta);
+      _hourRollups[i].AddMeasure(_totalXDelta);
+      _hourRollups[i].AddMeasure(_totalYDelta);
+      _hourRollups[i].AddMeasure(_totalZDelta);
+      
+    }
+  }
+
+  RollupsInterface *GetMeasure(int axisIndex, int measureIndex) {
+    if (measureIndex == 0)
+      return &_fifteenMinuteRollups[axisIndex];
+    else 
+      return &_hourRollups[axisIndex];
+  }
+
+  int GetMeasureCount() {
+    return MEASURE_COUNT;
+  }
+  
   String Name;
   
 };
@@ -371,7 +347,7 @@ class Magnometer9Dof : public MagnometerBase
     }
   }
 public:
-  Magnometer9Dof()
+  Magnometer9Dof() : MagnometerBase()
   {
     Name = "Mag9Dof";
   }
@@ -481,21 +457,20 @@ class MagnometerHMC5883 : public MagnometerBase
 };
 
 
-Magnometer3110 magnometer3110;
 Magnometer9Dof magnometer9Dof;
-MagnometerHMC5883 magnometerHMC5883;
 
-MagnometerBase *magnometers[] = { &magnometer3110, &magnometer9Dof};
+MagnometerBase *magnometers[] = { &magnometer9Dof};
 
 SoftwareSerial mySerial(3,2);
-
-
-
 
 void setup() {
   mySerial.begin (57600);
   Serial.begin(115200);
+  Serial.println("starting setup");
   Wire.begin();        // join i2c bus (address optional for master)
+
+  /*Rollups<60> rollup(900);
+  Serial.println(String(sizeof(rollup)));*/
 
   for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
   {
@@ -503,15 +478,121 @@ void setup() {
   }
 
   pinMode(LED_BUILTIN, OUTPUT);
+}
+
+/*
+class AsyncHttpClient {
+  enum AsyncHttpClientState {
+    Connecting,
+    SendingState,
+    ReceivingState,
+    ProcessResponseState
+    DisconnectState
+  };
+
+  AsyncHttpClientState _state
   
-  
-  
+  AsyncPrinter _connection;
+
+  char _response[1460];
+  char _sendData[1460];
+
+  public:
+  AsyncHttpClient() 
+  {
+    
+  }
+
+  void Connect(IPAddress ip, int port) {
+    _connection.connect(ip, port);
+  }
+
+  void Connect(const char *host, int port) {
+    _connection.connect(host, port);
+  }
+
+  void SendString(const char *pData) {
+    _connection.write(pData, strlen(pData));
+  }
+
+  const char *GetResponse() {
+    return &_response[0];
+  }
+
+  AsyncHttpClientState GetState() {
+    return _state;
+  }
+
+  void DoWork() {
+    
+  }
+}*/
+bool wifiConnected = false;
+#define ClientDebugMetric(s) client.print(s); 
+#define ClientDebugMetricNewLine(s) client.println(s); 
+#define ClientDebug(s) client.println(s);
+
+
+unsigned long previousMetricPublishMs = 0;
+void PublishMetricsToWifi();
+
+void PublishMetricsToWifi() {
+    for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
+    {
+      if (wifiConnected) {
+         WiFiClient client;
+        IPAddress server(192,168,1,13);
+        if (client.connect(server, 8081)) {
+           Serial.println("client connected");
+          ClientDebugMetricNewLine("PUT /magneticMetrics HTTP/1.1");
+          ClientDebugMetricNewLine("Accept: */*");
+          ClientDebugMetricNewLine("Content-Type: application/text");
+          ClientDebugMetricNewLine("Transfer-Encoding: chunked");
+          ClientDebugMetricNewLine("");
+
+          char axisNames[3][2]={"x", "y", "z"};
+          char chunk[300];
+          char chunkLen[30];
+          sprintf(chunk, "[\r\n");
+          sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
+          ClientDebugMetric(chunkLen);
+          ClientDebugMetric(chunk);
+
+          char comma[2] = {0,0};
+          
+          for(int measureIndex = 0; measureIndex < magnometers[i]->GetMeasureCount(); measureIndex++) {
+            for(int axisIndex = 0; axisIndex < 3; axisIndex++) {
+              RollupsInterface *rollups = magnometers[i]->GetMeasure(axisIndex, measureIndex);
+              for(int rollupIndex = 0; rollupIndex < rollups->RollupCount(); rollupIndex++)
+              {
+                Rollup *pRollup = rollups->GetRollup(rollupIndex);
+
+                if (pRollup->active) {
+                  sprintf(chunk, "%s[{\"apiKey\": \"opensecret\", \"magName\":\"%s\", \"axisName\":\"%s\", \"total\":%lu, \"sampleCount\":%lu, \"startTicks\": %lu, \"startTime\":%lu, \"intervalSeconds\":%lu}]\r\n", comma, magnometers[i]->Name.c_str(), axisNames[axisIndex], pRollup->total, pRollup->sampleCount, pRollup->startTicks, pRollup->startTime, pRollup->intervalSeconds);
+                  sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
+                  ClientDebugMetric(chunkLen);
+                  ClientDebugMetric(chunk);
+                  strcpy(comma, ",");
+                }
+              }
+            }
+          }
+          sprintf(chunk, "]\r\n");
+          sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
+          ClientDebugMetric(chunkLen);
+          ClientDebugMetric(chunk);
+          sprintf(chunk, "\r\n");
+          sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
+          ClientDebugMetric(chunkLen);
+          ClientDebugMetric(chunk);
+        }
+      }
+            
+    }
 }
 
 unsigned long previousPublishMs = 0;
-bool wifiConnected = false;
 
-#define ClientDebug(s) client.println(s); Serial.println(s);
 
 void PublishToWifi(MagnometerBase *pMag);
 
@@ -520,23 +601,47 @@ void PublishToWifi(MagnometerBase *pMag)
       if (wifiConnected) {
          WiFiClient client;
         
-        IPAddress server(192,168,1,11);
-        String PostData = "{\"name\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
+        IPAddress server(192,168,1,13);
+        
+        String PostData = "{\"apiKey\": \"opensecret\", \"magName\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
         if (client.connect(server, 8081)) {
-           Serial.print("client connected");
+           Serial.println("client connected");
 
-          ClientDebug("PUT /putMagneticReading HTTP/1.1");
-          //ClientDebug("Host: 192.168.1.11:8081"); 
-          
+          ClientDebug("POST /magneticReading HTTP/1.1");
           ClientDebug("Accept: */*");
           ClientDebug("Content-Type: application/json");
           ClientDebug("Content-Length: " + String(PostData.length()));
           ClientDebug("");
           ClientDebug(PostData);
-          delay(100);          
+          delay(100);
+          char results[1000];
+          results[0] = 0;
+          int i = 0;
+          while (client.available() && i < sizeof(results)-2) {
+            char c = client.read();
+            results[i] = c;
+            results[i+1] = 0;
+            i++;
+            //Serial.write(c);
+          }
+          const char firstToken[] = "{\"epoch\":";
+          
+          char* command = strstr(results, firstToken);
+          if (command) {
+            command += sizeof(firstToken);
+            char *endCommand = strstr(command, "}");
+            if (endCommand) {
+              *endCommand = 0;
+            }
+            int epoch = atoi(command);
+            //Serial.println("parsed epoch: " + String(epoch));
+            if (epoch > 0) {
+              setTime(epoch);
+            }
+          }
         }
         else
-          Serial.print("client not connected");
+          Serial.println("client not connected");
       }
 }
  
@@ -544,7 +649,7 @@ void PublishToWifi(MagnometerBase *pMag)
 void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
-  
+
   for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
   {
     magnometers[i]->Calculate();
@@ -569,13 +674,28 @@ void loop()
       if (wifiConnected) {
         PublishToWifi(magnometers[i]);
       }
-      
+
+      if (timeStatus() != timeNotSet)
+        magnometers[i]->AddToMetrics();
+       else
+       Serial.println("Skipping adding metrics because time not set");
       
       mySerial.print(line);
       Serial.println(line);
       magnometers[i]->ResetCalculations();
     }      
   }
+
+  if ((unsigned long)(currentMillis - previousMetricPublishMs) >= 1000*10) 
+  {
+        previousMetricPublishMs = currentMillis;
+        if (timeStatus() != timeNotSet)
+        {
+          Serial.println("Publishing Metrics");
+          PublishMetricsToWifi();
+        }
+  }
+  
   
   delay(5);
   
