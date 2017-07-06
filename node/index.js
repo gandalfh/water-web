@@ -26,7 +26,7 @@ app.get('/realTimeMagneticReading', function(request, response){
 
 function broadcastClients(magneticReading) {
 		lastMagneticReading = magneticReading;
-		magneticReading.lastUpdateTime = new DateTime();
+		magneticReading.lastUpdateTime = new Date();
 
 		lastMagneticReadings[magneticReading.magName] = magneticReading;
 		

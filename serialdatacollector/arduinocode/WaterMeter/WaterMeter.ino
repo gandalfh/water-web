@@ -567,7 +567,7 @@ void PublishMetricsToWifi() {
          WiFiClient client;
         IPAddress server(167,114,182,148);
         DEBUGSTART1;
-        if (client.connect(server, 8081)) {
+        if (client.connect(server, 80)) {
           DEBUGEND1("Client Connect Ms: ");
            Serial.println("client connected");
           ClientDebugMetricNewLine("PUT /magneticMetrics HTTP/1.1");
@@ -674,7 +674,7 @@ private:
     sprintf(_postData, "{\"apiKey\": \"opensecret\", \"magName\": \"%s\", \"x\": %d, \"y\": %d, \"z\": %d, \"sampleCount\": %d, \"upTimeHours\": %d.%02d, \"wifiUpTimePct\": %d, \"publishErrorCount\": %d, \"metricPublishErrorCount\": %d, \"freeMemory\": %d }\r\n",
       pMag->Name.c_str(), pMag->GetTotalXDelta(), pMag->GetTotalYDelta(), pMag->GetTotalZDelta(), pMag->GetSampleCount(), (int)(millis()/(1000.0*60.0*60.0)), (int)(((millis()%(1000*60*60))/(1000.0*60.0*60.0))*100), (int)(((float)wifiUpMilliseconds/(float)millis())*100.0), publishErrorCount, metricPublishErrorCount, system_get_free_heap_size());
       Serial.println(_postData);
-    _client.connect(server, 8081);
+    _client.connect(server, 80);
     SetState(Connecting);
     _connectStarted = millis();
   }
@@ -746,6 +746,7 @@ void PublishToWifiOnData(void *dataArg, AsyncClient *pClient, void* pData, size_
   const char firstToken[] = "{\"epoch\":";
       
   char* command = strstr((char*)pData, firstToken);
+  Serial.println((char*)pData);
   if (command) {
     command += sizeof(firstToken)-1;
     char *endCommand = strstr(command, "}");
