@@ -4,6 +4,8 @@ logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*XYZ.json
+*XYZ-bad.json
 
 # Runtime data
 pids

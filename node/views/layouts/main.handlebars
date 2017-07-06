@@ -216,7 +216,7 @@
 	}
 	function setRealTimeText(message) {
 	
-		$('#realtime_text_'+message.magName).text(message.magName + ' x: ' + Math.round(message.x) + ' y: ' + Math.round(message.y) + ' z: ' + Math.round(message.z));
+		$('#realtime_text_'+message.magName).text(message.magName + ' x: ' + Math.round(message.x) + ' y: ' + Math.round(message.y) + ' z: ' + Math.round(message.z) + " Sample Count: "+ message.sampleCount);
 		
 		var dt = new Date();
 		realtimeData = realTimeDatas[message.magName];
@@ -387,6 +387,10 @@ var lastJsonFile;
 		consolidatedData = {}
 		for (var index = 0; index < waterData.WaterStats.WaterStat.length; index++)	{
 			row = waterData.WaterStats.WaterStat[index];
+			if (!row.localTime) {
+				var localTime = new Date(row.startTimeEpoch*1000);
+				row.localTime = moment(localTime).format("YYYY-MM-DD HH:mm:ss");
+			}
 			if (row.interval == interval) {
 				if (!consolidatedData[row.localTime]) {
 					consolidatedData[row.localTime] = { localTime: row.localTime, x: 0, y: 0, z: 0 };

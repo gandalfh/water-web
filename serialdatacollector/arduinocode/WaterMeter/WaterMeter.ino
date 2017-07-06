@@ -1,3 +1,11 @@
+
+#include "AsyncPrinter.h"
+#include <async_config.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncTCPbuffer.h>
+#include <SyncClient.h>
+#include <tcp_axtls.h>
+
 #include <Time.h>
 #include <TimeLib.h>
 
@@ -23,10 +31,22 @@
 
 #include <Wire.h>
 
+bool goChatty = false;
+#define CHATTYDEBUG(s) if(goChatty) Serial.println(s);
+
 time_t RoundTime(time_t time, unsigned int intervalSeconds)
 {
-  return time % intervalSeconds;
+  return ((unsigned int)(time / intervalSeconds))*intervalSeconds;
 }
+
+
+
+#include <malloc.h>
+ 
+extern "C" {
+#include "user_interface.h"
+}
+
 
 class Rollup {
   public:
@@ -35,16 +55,22 @@ class Rollup {
   unsigned int startTicks;
   time_t startTime;
   unsigned int intervalSeconds;
-  bool active;
+  unsigned int active : 1;
+  unsigned int first : 1;
+  unsigned int whole : 1;
 
   Rollup()
   {
     active = false;
+    first = false;
+    whole = false;
   }
   void ResetRollup() {
-    startTime = 0;
     total = 0;
     sampleCount = 0;
+    whole=false;
+    first=false;
+    active=false;
     startTicks = millis();
     startTime = RoundTime(now(), intervalSeconds);
   }
@@ -59,7 +85,7 @@ class RollupsInterface {
   RollupsInterface() {
     
   }
-  virtual void AddMeasure(unsigned int value) 
+  virtual bool AddMeasure(unsigned int value) 
   {
   
   }
@@ -91,21 +117,28 @@ template <int ROLLUP_COUNT> class Rollups : public RollupsInterface
     _currentRollupIndex = 0;
   }
   
-  void AddMeasure(unsigned int value) {
+  bool AddMeasure(unsigned int value) {
     Rollup *rollup = &_rollups[_currentRollupIndex];
     if (!rollup->active)
     {
       rollup->ResetRollup();
       rollup->active=true;
+      rollup->first=true;
     }
-      
+
+    bool newRollupCreated = false;
     if (millis() > rollup->startTicks + _intervalSeconds*1000) {
+      if (!rollup->first) {
+        rollup->whole=true;
+      }
       _currentRollupIndex = (_currentRollupIndex + 1) % ROLLUP_COUNT;
       rollup = &_rollups[_currentRollupIndex];
       rollup->ResetRollup();
       rollup->active = true;
+      newRollupCreated = true;
     }
     rollup->AddMeasure(value);
+    return newRollupCreated;
   }
 
   Rollup *GetRollup(int rollupIndex) {
@@ -132,6 +165,7 @@ class MagnometerBase
     _currentX = 0;
     _currentY = 0;
     _currentZ = 0;
+    _sampleCount = 0;
   }
 
   bool _firstReading;
@@ -142,13 +176,14 @@ protected:
   int _currentX;
   int _currentY;
   int _currentZ;
+  unsigned int _sampleCount;
   virtual void GatherData() = 0;
 private:
 
   unsigned long _totalXDelta;
   unsigned long _totalYDelta;
   unsigned long _totalZDelta;
-  #define HOURS_KEPT 48
+  #define HOURS_KEPT 4
   #define MEASURE_COUNT 2
   Rollups<HOURS_KEPT*4> _fifteenMinuteRollups[3] = {
      Rollups<HOURS_KEPT*4>(900),
@@ -178,6 +213,7 @@ public:
       _totalXDelta += abs(_currentX - _lastX);
       _totalYDelta += abs(_currentY - _lastY);
       _totalZDelta += abs(_currentZ - _lastZ);
+      _sampleCount++;
 
       _lastX = _currentX;
       _lastY = _currentY;
@@ -189,6 +225,7 @@ public:
     _totalXDelta = 0;
     _totalYDelta = 0;
     _totalZDelta = 0;
+    _sampleCount=0;
   }
   unsigned long GetTotalXDelta()
   {
@@ -202,17 +239,44 @@ public:
   {
     return _totalZDelta;
   }
+  unsigned long GetSampleCount()
+  {
+    return _sampleCount;
+  }
 
-  void AddToMetrics() {
+  bool newRollupsCreated [3] = {false, false, false};
+
+  bool AddToMetrics() {
     for (int i = 0; i < 3; i++) {
-      _fifteenMinuteRollups[i].AddMeasure(_totalXDelta);
-      _fifteenMinuteRollups[i].AddMeasure(_totalYDelta);
-      _fifteenMinuteRollups[i].AddMeasure(_totalZDelta);
-      _hourRollups[i].AddMeasure(_totalXDelta);
-      _hourRollups[i].AddMeasure(_totalYDelta);
-      _hourRollups[i].AddMeasure(_totalZDelta);
-      
+      if (i == 0) {
+        if (_fifteenMinuteRollups[i].AddMeasure(_totalXDelta)) {
+          newRollupsCreated[0] = true;
+        }
+        _hourRollups[i].AddMeasure(_totalXDelta);
+      }
+      else if (i == 1) {
+        if(_fifteenMinuteRollups[i].AddMeasure(_totalYDelta)) {
+          newRollupsCreated[1] = true;
+        }
+        _hourRollups[i].AddMeasure(_totalYDelta);
+      }
+      else
+      {
+        if (_fifteenMinuteRollups[i].AddMeasure(_totalZDelta)) {
+          newRollupsCreated[2] = true;
+        }
+        _hourRollups[i].AddMeasure(_totalZDelta);
+      }
     }
+
+    if (newRollupsCreated[0] && newRollupsCreated[1] && newRollupsCreated[2]) {
+      newRollupsCreated[0]=true;
+      newRollupsCreated[0]=true;      
+      newRollupsCreated[0]=true;
+      return true;
+    }
+    else
+      return false;
   }
 
   RollupsInterface *GetMeasure(int axisIndex, int measureIndex) {
@@ -457,9 +521,9 @@ class MagnometerHMC5883 : public MagnometerBase
 };
 
 
-Magnometer9Dof magnometer9Dof;
+Magnometer9Dof magnometer;
 
-MagnometerBase *magnometers[] = { &magnometer9Dof};
+MagnometerBase *magnometers[] = { &magnometer};
 
 SoftwareSerial mySerial(3,2);
 
@@ -480,69 +544,31 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
 }
 
-/*
-class AsyncHttpClient {
-  enum AsyncHttpClientState {
-    Connecting,
-    SendingState,
-    ReceivingState,
-    ProcessResponseState
-    DisconnectState
-  };
 
-  AsyncHttpClientState _state
-  
-  AsyncPrinter _connection;
-
-  char _response[1460];
-  char _sendData[1460];
-
-  public:
-  AsyncHttpClient() 
-  {
-    
-  }
-
-  void Connect(IPAddress ip, int port) {
-    _connection.connect(ip, port);
-  }
-
-  void Connect(const char *host, int port) {
-    _connection.connect(host, port);
-  }
-
-  void SendString(const char *pData) {
-    _connection.write(pData, strlen(pData));
-  }
-
-  const char *GetResponse() {
-    return &_response[0];
-  }
-
-  AsyncHttpClientState GetState() {
-    return _state;
-  }
-
-  void DoWork() {
-    
-  }
-}*/
 bool wifiConnected = false;
 #define ClientDebugMetric(s) client.print(s); 
 #define ClientDebugMetricNewLine(s) client.println(s); 
 #define ClientDebug(s) client.println(s);
 
+#define DEBUGSTART1 unsigned long startTimer1 = millis();
+#define DEBUGEND1(s) Serial.println(s + String(millis() - startTimer1));
+
 
 unsigned long previousMetricPublishMs = 0;
+unsigned long metricPublishErrorCount = 0;
+
 void PublishMetricsToWifi();
 
 void PublishMetricsToWifi() {
+  
     for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
     {
       if (wifiConnected) {
          WiFiClient client;
-        IPAddress server(192,168,1,13);
+        IPAddress server(167,114,182,148);
+        DEBUGSTART1;
         if (client.connect(server, 8081)) {
+          DEBUGEND1("Client Connect Ms: ");
            Serial.println("client connected");
           ClientDebugMetricNewLine("PUT /magneticMetrics HTTP/1.1");
           ClientDebugMetricNewLine("Accept: */*");
@@ -553,7 +579,7 @@ void PublishMetricsToWifi() {
           char axisNames[3][2]={"x", "y", "z"};
           char chunk[300];
           char chunkLen[30];
-          sprintf(chunk, "[\r\n");
+          sprintf(chunk, "{\"apiKey\": \"opensecret\", \"magName\":\"%s\", \"magData\":[\r\n", magnometers[i]->Name.c_str());
           sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
           ClientDebugMetric(chunkLen);
           ClientDebugMetric(chunk);
@@ -568,7 +594,12 @@ void PublishMetricsToWifi() {
                 Rollup *pRollup = rollups->GetRollup(rollupIndex);
 
                 if (pRollup->active) {
-                  sprintf(chunk, "%s[{\"apiKey\": \"opensecret\", \"magName\":\"%s\", \"axisName\":\"%s\", \"total\":%lu, \"sampleCount\":%lu, \"startTicks\": %lu, \"startTime\":%lu, \"intervalSeconds\":%lu}]\r\n", comma, magnometers[i]->Name.c_str(), axisNames[axisIndex], pRollup->total, pRollup->sampleCount, pRollup->startTicks, pRollup->startTime, pRollup->intervalSeconds);
+                  char temp[100];
+                  temp[0]=0;
+                  if (pRollup->first) {
+                    sprintf(temp, ", \"first\": 1"); 
+                  }
+                  sprintf(chunk, "%s{\"axisName\":\"%s\", \"total\":%lu, \"sampleCount\":%lu, \"startTicks\": %lu, \"startTime\":%lu, \"intervalSeconds\":%lu, \"whole\": %d%s }\r\n", comma, axisNames[axisIndex], pRollup->total, pRollup->sampleCount, pRollup->startTicks, pRollup->startTime, pRollup->intervalSeconds, pRollup->whole, temp);
                   sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
                   ClientDebugMetric(chunkLen);
                   ClientDebugMetric(chunk);
@@ -577,7 +608,7 @@ void PublishMetricsToWifi() {
               }
             }
           }
-          sprintf(chunk, "]\r\n");
+          sprintf(chunk, "]}\r\n");
           sprintf(chunkLen, "%x\r\n", strlen(chunk)-2);
           ClientDebugMetric(chunkLen);
           ClientDebugMetric(chunk);
@@ -586,6 +617,10 @@ void PublishMetricsToWifi() {
           ClientDebugMetric(chunkLen);
           ClientDebugMetric(chunk);
         }
+        else
+        {
+          metricPublishErrorCount++;
+        }
       }
             
     }
@@ -593,75 +628,187 @@ void PublishMetricsToWifi() {
 
 unsigned long previousPublishMs = 0;
 
-
 void PublishToWifi(MagnometerBase *pMag);
+void PublishToWifiOnData(void *dataArg, AsyncClient *pClient, void* pData, size_t len);
+unsigned long wifiUpMilliseconds = 0;
+unsigned long publishErrorCount = 0;
 
+class WifiPublisher {
+  
+public:
+  enum WifiPublisherState {
+    Ready,
+    Connecting,
+    WaitingForResponse,
+    CloseConnection,
+    WaitDisconnect
+  };  
+private:
+
+  AsyncClient _client;
+
+  WifiPublisherState _state;
+  unsigned int _lastPublishMessageSent;
+  unsigned int _connectStarted;
+  unsigned int _closeStarted;
+  bool _needClose = false;
+  public:
+  void SetState(WifiPublisherState state) {
+    if(state == CloseConnection) {
+      _closeStarted = millis();
+    }
+    _state = state;
+  }
+
+
+  WifiPublisher() {
+    _client.onData(PublishToWifiOnData, this);
+  }
+
+  char _postData[300];
+  void StartPublish(MagnometerBase *pMag)
+  {
+    if (_state != Ready) return;
+    _needClose = false; 
+    IPAddress server(167,114,182,148);
+    sprintf(_postData, "{\"apiKey\": \"opensecret\", \"magName\": \"%s\", \"x\": %d, \"y\": %d, \"z\": %d, \"sampleCount\": %d, \"upTimeHours\": %d.%02d, \"wifiUpTimePct\": %d, \"publishErrorCount\": %d, \"metricPublishErrorCount\": %d, \"freeMemory\": %d }\r\n",
+      pMag->Name.c_str(), pMag->GetTotalXDelta(), pMag->GetTotalYDelta(), pMag->GetTotalZDelta(), pMag->GetSampleCount(), (int)(millis()/(1000.0*60.0*60.0)), (int)(((millis()%(1000*60*60))/(1000.0*60.0*60.0))*100), (int)(((float)wifiUpMilliseconds/(float)millis())*100.0), publishErrorCount, metricPublishErrorCount, system_get_free_heap_size());
+      Serial.println(_postData);
+    _client.connect(server, 8081);
+    SetState(Connecting);
+    _connectStarted = millis();
+  }
+
+  void PostData() {
+      Serial.println("client connected");
+    
+      DEBUGSTART1;
+      char temp[800];
+      temp[0] = 0;
+      
+      strcat(temp, "POST /magneticReading HTTP/1.1\r\n");
+      strcat(temp, "Accept: */*\r\n");
+      strcat(temp, "Content-Type: application/json\r\n");
+      char contentLenTemp[100];
+      sprintf(contentLenTemp, "Content-Length: %d\r\n", strlen(_postData));
+      strcat(temp, contentLenTemp);
+      strcat(temp, "\r\n");
+      strcat(temp, _postData);
+      _client.write((char *)&temp[0], strlen(temp));
+      DEBUGEND1("Client Data Posted ms: ");
+      Serial.print(temp);
+      _lastPublishMessageSent = millis();
+      SetState(WaitingForResponse);
+  }
+
+  void DoWork() {
+    
+    switch(_state) {
+      case Connecting:
+        if (_client.connected()) {
+          _needClose = true;
+          PostData();
+        }
+        else if (millis() - _connectStarted > 1500) {
+          Serial.println("timed out, publish failed, going back to ready");
+          _client.abort();
+          publishErrorCount++;
+          Serial.println("aborted connection");
+          SetState(Ready);        
+        }
+        break;  
+      case WaitingForResponse:
+        if (millis() - _lastPublishMessageSent > 1500) {
+          Serial.println("timed out waiting for response, publish failed, closing connection");
+          publishErrorCount++;
+          SetState(CloseConnection);
+        }
+        break;
+      case WifiPublisher::CloseConnection:
+        if(millis() - _closeStarted > 500) {
+          Serial.println("CloseConnection State");
+          if (_needClose) {
+            _client.close(true);
+            _needClose = false;
+            Serial.println("After close");
+          }
+            
+          SetState(Ready);
+        }
+        break;
+    }
+  }
+};
+
+
+void PublishToWifiOnData(void *dataArg, AsyncClient *pClient, void* pData, size_t len) {
+  Serial.println("ondata");
+  const char firstToken[] = "{\"epoch\":";
+      
+  char* command = strstr((char*)pData, firstToken);
+  if (command) {
+    command += sizeof(firstToken)-1;
+    char *endCommand = strstr(command, "}");
+    if (endCommand) {
+      *endCommand = 0;
+    }
+    int epoch = atoi(command);
+    if (epoch > 0) {
+      if (timeStatus() != timeSet || abs(epoch - now()) > 15) {
+        char temp[100];
+        sprintf(temp, "parsed epoch: %d", epoch);
+        Serial.println(temp);
+        setTime(epoch);
+        time_t currentDateTime = now();
+        sprintf(temp, "Setting current time to: %04d-%02d-%02d %02d:%02d:%02d", year(currentDateTime), month(currentDateTime), day(currentDateTime), hour(currentDateTime), minute(currentDateTime), second(currentDateTime)); 
+        Serial.println(temp);
+      }
+      if (abs(epoch - now()) > 10) {
+        Serial.println("Time might be out of synch as much as 10 seconds");
+      }
+    }
+  }
+
+  ((WifiPublisher*)dataArg)->SetState(WifiPublisher::CloseConnection);
+  
+}
+
+
+WifiPublisher wifiPublisher;
 void PublishToWifi(MagnometerBase *pMag)
 {
       if (wifiConnected) {
-         WiFiClient client;
-        
-        IPAddress server(192,168,1,13);
-        
-        String PostData = "{\"apiKey\": \"opensecret\", \"magName\": \"" + pMag->Name + "\", \"x\": " + String(pMag->GetTotalXDelta()) + ", \"y\": " + String(pMag->GetTotalYDelta()) + ", \"z\": " + String(pMag->GetTotalZDelta()) + " }";
-        if (client.connect(server, 8081)) {
-           Serial.println("client connected");
-
-          ClientDebug("POST /magneticReading HTTP/1.1");
-          ClientDebug("Accept: */*");
-          ClientDebug("Content-Type: application/json");
-          ClientDebug("Content-Length: " + String(PostData.length()));
-          ClientDebug("");
-          ClientDebug(PostData);
-          delay(100);
-          char results[1000];
-          results[0] = 0;
-          int i = 0;
-          while (client.available() && i < sizeof(results)-2) {
-            char c = client.read();
-            results[i] = c;
-            results[i+1] = 0;
-            i++;
-            //Serial.write(c);
-          }
-          const char firstToken[] = "{\"epoch\":";
-          
-          char* command = strstr(results, firstToken);
-          if (command) {
-            command += sizeof(firstToken);
-            char *endCommand = strstr(command, "}");
-            if (endCommand) {
-              *endCommand = 0;
-            }
-            int epoch = atoi(command);
-            //Serial.println("parsed epoch: " + String(epoch));
-            if (epoch > 0) {
-              setTime(epoch);
-            }
-          }
-        }
-        else
-          Serial.println("client not connected");
+        wifiPublisher.StartPublish(pMag);
       }
+        
 }
  
-
+unsigned long startingAvailableMemory = 0;
+unsigned long lastMagnometerRead = 0;
+bool publishKeepAlive = false;
 void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
 
-  for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
-  {
-    magnometers[i]->Calculate();
+  if (millis() - lastMagnometerRead > 5) {
+    lastMagnometerRead = millis();
+    for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
+    {
+      magnometers[i]->Calculate();
+    }
   }
 
 
   unsigned long currentMillis = millis();
+  
  
+  wifiPublisher.DoWork();
+
+  bool newRollupsCreated = false;
+
   
   if ((unsigned long)(currentMillis - previousPublishMs) >= 3000) 
   {
-    previousPublishMs = currentMillis;
     
     for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
     {
@@ -672,66 +819,106 @@ void loop()
       free(hash);
       free(md5str);
       if (wifiConnected) {
-        PublishToWifi(magnometers[i]);
+        if (timeStatus() == timeNotSet  || publishKeepAlive) {
+          publishKeepAlive = false;
+          PublishToWifi(magnometers[i]);          
+        }
+        else
+          Serial.println("Skipping Publishing because of annoying crash problems");
       }
 
       if (timeStatus() != timeNotSet)
-        magnometers[i]->AddToMetrics();
-       else
-       Serial.println("Skipping adding metrics because time not set");
+      {
+        if (magnometers[i]->AddToMetrics())
+          newRollupsCreated = true;
+      }
+      else
+        Serial.println("Skipping adding metrics because time not set");
       
       mySerial.print(line);
       Serial.println(line);
       magnometers[i]->ResetCalculations();
-    }      
+    } 
+    previousPublishMs = currentMillis;
+         
   }
 
-  if ((unsigned long)(currentMillis - previousMetricPublishMs) >= 1000*10) 
+  if (newRollupsCreated) 
   {
-        previousMetricPublishMs = currentMillis;
-        if (timeStatus() != timeNotSet)
-        {
-          Serial.println("Publishing Metrics");
-          PublishMetricsToWifi();
+    newRollupsCreated = false;
+      previousMetricPublishMs = currentMillis;
+      if (timeStatus() != timeNotSet)
+      {
+        Serial.println("Publishing Metrics");
+        unsigned int startPublishTime = millis();
+        PublishMetricsToWifi();
+
+        if (system_get_free_heap_size() / startingAvailableMemory <= 0.25) {
+          ESP.reset();
         }
+
+        //Skip adding samples to calculations if metric publish took a long time, hack until I fix metric publish to be asynch
+        if (millis() - startPublishTime > 10) {
+          for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
+          {
+            magnometers[i]->ResetCalculations();
+          }
+          previousPublishMs = millis();
+          publishKeepAlive = true;
+        }
+      }
   }
   
-  
-  delay(5);
-  
-  digitalWrite(LED_BUILTIN, LOW);
 
   CheckWifiStatus();
+  
+  digitalWrite(LED_BUILTIN, LOW);
 
 }
 
 unsigned long previousWifiAttempt = 0;
-int wifiRadioStatus = WL_IDLE_STATUS;    
+int wifiRadioStatus = WL_IDLE_STATUS; 
+
+unsigned long lastWifiUpCheck = 0;
+
 
 void CheckWifiStatus() 
 {
-  if ((unsigned long)(millis() - previousWifiAttempt) >= 10000) 
-  {  
-    previousWifiAttempt = millis();
-    if (wifiRadioStatus != WL_CONNECTED && !wifiConnected) {
-
-      #include "wifipassword.h"
-      Serial.print("Attempting to connect to WPA SSID: ");
-      Serial.println(ssid);
-      
-      // Connect to WPA/WPA2 network
-      wifiRadioStatus = WiFi.begin(ssid, password);
-    }
+  if (lastWifiUpCheck == 0) {
+    lastWifiUpCheck = millis();
   }
   
-  if(wifiConnected != (WiFi.status() == WL_CONNECTED)) {
+  if ((unsigned long)(millis() - previousWifiAttempt) >= 30000 && !wifiConnected) 
+  {  
+    previousWifiAttempt = millis();
+    #include "wifipassword.h"
+    Serial.print("Attempting to connect to WPA SSID: ");
+    Serial.println(ssid);
+    
+    // Connect to WPA/WPA2 network
+    wifiRadioStatus = WiFi.begin(ssid, password);
+
+  }
+  
+  if(wifiConnected != ((WiFi.status() == WL_CONNECTED))) {
+    Serial.println(String(WiFi.status()));
     wifiConnected = WiFi.status() == WL_CONNECTED;
     if (wifiConnected) 
-      Serial.print("Wifi connected");
+      Serial.println("Wifi connected");
      else
-      Serial.print("Wifi disconnected");
+      Serial.println("Wifi disconnected");
+  }
+
+  if (wifiConnected) {
+    if (startingAvailableMemory == 0) {
+      startingAvailableMemory = system_get_free_heap_size();
+    }
+    wifiUpMilliseconds += millis() - lastWifiUpCheck;
+    lastWifiUpCheck = millis();
   }
 }
+
+
 
 
 

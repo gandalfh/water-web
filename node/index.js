@@ -26,10 +26,12 @@ app.get('/realTimeMagneticReading', function(request, response){
 
 function broadcastClients(magneticReading) {
 		lastMagneticReading = magneticReading;
+		magneticReading.lastUpdateTime = new DateTime();
+
 		lastMagneticReadings[magneticReading.magName] = magneticReading;
 		
 		webSocketServer.connections.forEach(function (conn) {
-				console.log('sending to client: ' + JSON.stringify(magneticReading));
+				//console.log('sending to client: ' + JSON.stringify(magneticReading));
 				try {
 					conn.sendText(JSON.stringify(magneticReading));
 				} catch (e)
@@ -49,7 +51,7 @@ app.post('/realTimeMagneticReading', function(request, response){
 });
 
 app.post('/magneticReading', function(request, response){
-		console.log('putMagneticReading received' + JSON.stringify(request.body));
+	console.log('putMagneticReading received' + JSON.stringify(request.body));
 	if (request.body.apiKey === 'opensecret') {
 		delete request.body.apiKey;
 		broadcastClients(request.body);
@@ -61,6 +63,156 @@ app.post('/magneticReading', function(request, response){
 	response.send(currentTime);
 });
 
+function pad(n, width, z) {
+  z = z || '0';
+  n = n + '';
+  return n.length >= width ? n : new Array(width - n.length + 1).join(z) + n;
+}
+function MakeFileNameFromDate(today, magName) {
+	return "./data/" + today.getFullYear() + "-" + pad(today.getMonth()+1, 2) + "-" + pad(today.getDate()+1, 2) + "-"+ magName + "-XYZ.json";
+}
+
+function MakeKeyFromWaterStat(waterStat) {
+	return waterStat.interval + '-' + waterStat.startTimeEpoch + '-' + waterStat.name	
+}
+
+function RecalculateBaselineAverages(waterData) {
+	var baselineAverages = {};
+	for (var i = 0; i < waterData.WaterStats.WaterStat.length; i++) {
+		var waterStat = waterData.WaterStats.WaterStat[i];
+		var baselineAverageKey = waterStat.name.toUpperCase() + waterStat.interval; 
+		if (!baselineAverages[baselineAverageKey] || waterStat.average < baselineAverages[baselineAverageKey]) {
+			baselineAverages[baselineAverageKey] = waterStat.average;
+		}
+	}
+
+	for (var i = 0; i < waterData.WaterStats.WaterStat.length; i++) {
+		var waterStat = waterData.WaterStats.WaterStat[i];
+		var baselineAverageKey = waterStat.name + waterStat.interval;
+		waterStat.baseLineAverage = baselineAverages[baselineAverageKey];
+		waterStat.adjustedAverage = waterStat.average - baselineAverages[baselineAverageKey];
+	}
+}
+
+function WriteAndRenameFileData(fileName, waterData) {
+	fs.writeFile(fileName + "new" , JSON.stringify(waterData),
+			function(error){
+				console.log("file saved:" +fileName + "new");
+				if (fs.existsSync(fileName)) {
+					fs.unlink(fileName);
+				}
+				fs.rename(fileName + 'new', fileName);
+				console.log("file renamed to " + fileName)
+			}
+		);	
+}
+
+function TrimLowSampleCounts(waterData) {
+	var newArray = [];
+	for (var i = 0; i < waterData.WaterStats.WaterStat.length; i++) {
+		if (waterData.WaterStats.WaterStat[i].sampleCount >= waterData.WaterStats.WaterStat[i].interval/10) {
+			newArray.push(waterData.WaterStats.WaterStat[i]);
+		}
+	}
+	waterData.WaterStats.WaterStat = newArray;
+}
+
+function ProcessMetrics(metricData) {
+	var waterData = {WaterStats: {WaterStat: []}}
+	//console.log("Got " + metricData.magData.length + " records of magData");
+	for(var i = 0; i < metricData.magData.length; i++) {
+		console.log("sample count " + metricData.magData[i].sampleCount);
+		var average = Math.round(metricData.magData[i].sampleCount > 0 ? metricData.magData[i].total/metricData.magData[i].sampleCount : 0);
+		if (metricData.magData[i].sampleCount > metricData.magData[i].intervalSeconds/10) {
+			waterData.WaterStats.WaterStat.push({
+				name: metricData.magData[i].axisName.toUpperCase(),
+				interval: metricData.magData[i].intervalSeconds,
+				average: average,
+				baseLineAverage: 0,
+				adjustedAverage: 0,
+				sampleCount: metricData.magData[i].sampleCount,
+				startTicksMs: metricData.magData[i].startTicks,
+				startTimeEpoch: metricData.magData[i].startTime,
+				first: metricData.magData[i].first ? true:false,
+				whole: metricData.magData[i].whole ? true:false
+			});
+		}
+
+	}
+
+
+
+	var today = new Date();
+	var fileName = MakeFileNameFromDate(today, metricData.magName);
+	var loadFileName = fileName;
+
+	if (!fs.existsSync(fileName)) {
+		console.log(fileName + " does not exist");
+		var yesterday = new Date();
+		yesterday.setDate(yesterday.getDate()-1);
+
+		loadFileName = MakeFileNameFromDate(yesterday);
+	}
+
+	if (fs.existsSync(fileName)) {
+		console.log(fileName + " does exist");
+		fs.readFile(fileName, 'utf8', function(error, data){
+			console.log('loading existing data from ' + fileName);
+			var existingData = JSON.parse(data);
+			var intervalEpochKeys = {};
+			for (var i = 0; i < existingData.WaterStats.WaterStat.length; i++) {			
+				var waterStat = existingData.WaterStats.WaterStat[i];
+				intervalEpochKeys[MakeKeyFromWaterStat(waterStat)] = waterStat;
+			}
+			
+			for (var i = 0; i < waterData.WaterStats.WaterStat.length; i++) {
+				var newWaterStat = waterData.WaterStats.WaterStat[i];
+
+				if (intervalEpochKeys[MakeKeyFromWaterStat(newWaterStat)]) {
+					/*var old = intervalEpochKeys[MakeKeyFromWaterStat(newWaterStat)];
+					if (newWaterStat.first && newWaterStat.sampleCount > 0 && newWaterStat.sampleCount != old.sampleCount) {
+						newWaterStat.average = (newWaterStat.sampleCount*newWaterStat.average + old.sampleCount*old.average)/(newWaterStat.sampleCount + old.sampleCount);
+						newWaterStat.sampleCount = newWaterStat.sampleCount + old.sampleCount;
+					}
+					else
+					{*/
+						delete intervalEpochKeys[MakeKeyFromWaterStat(newWaterStat)];
+					//}
+				}
+			}
+
+			var count = 0;
+			for(var key in intervalEpochKeys) {
+				waterData.WaterStats.WaterStat.push(intervalEpochKeys[key]);
+				count++;
+			}
+
+			console.log('added ' + count + 'records');
+
+
+			RecalculateBaselineAverages(waterData);
+			TrimLowSampleCounts(waterData);
+
+			fileName = MakeFileNameFromDate(today, metricData.magName);
+
+			console.log("After adjustment" + JSON.stringify(waterData));
+			WriteAndRenameFileData(fileName, waterData);
+			
+
+		});
+
+
+	} else {
+		console.log(fileName + " does not exist, starting new file");
+		fileName = MakeFileNameFromDate(today, metricData.magName);
+		RecalculateBaselineAverages(waterData);
+		WriteAndRenameFileData(fileName, waterData);
+	}
+	
+
+
+
+}
 
 app.put('/magneticMetrics', function(request, response){
 	console.log('Metrics Received' + JSON.stringify(request.body));
@@ -76,6 +228,7 @@ app.put('/magneticMetrics', function(request, response){
 
     request.on('end', function () {
 		var metricData = JSON.parse(completedData.join(''));
+		ProcessMetrics(metricData);
 		console.log('Data Received: ' + JSON.stringify(metricData));
         console.log("total size = " + size);
     }); 
