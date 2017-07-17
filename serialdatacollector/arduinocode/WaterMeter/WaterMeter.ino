@@ -226,6 +226,7 @@ public:
     _totalYDelta = 0;
     _totalZDelta = 0;
     _sampleCount=0;
+    _firstReading = true; 
   }
   unsigned long GetTotalXDelta()
   {
@@ -270,9 +271,9 @@ public:
     }
 
     if (newRollupsCreated[0] && newRollupsCreated[1] && newRollupsCreated[2]) {
-      newRollupsCreated[0]=true;
-      newRollupsCreated[0]=true;      
-      newRollupsCreated[0]=true;
+      newRollupsCreated[0]=false;
+      newRollupsCreated[0]=false;      
+      newRollupsCreated[0]=false;
       return true;
     }
     else
@@ -546,8 +547,8 @@ void setup() {
 
 
 bool wifiConnected = false;
-#define ClientDebugMetric(s) client.print(s); 
-#define ClientDebugMetricNewLine(s) client.println(s); 
+#define ClientDebugMetric(s) client.print(s); Serial.print(s);
+#define ClientDebugMetricNewLine(s) client.println(s); Serial.println(s);
 #define ClientDebug(s) client.println(s);
 
 #define DEBUGSTART1 unsigned long startTimer1 = millis();
@@ -787,16 +788,30 @@ void PublishToWifi(MagnometerBase *pMag)
 unsigned long startingAvailableMemory = 0;
 unsigned long lastMagnometerRead = 0;
 bool publishKeepAlive = false;
+
+#define MAGNOMETER_READ_INTERVAL 10
+
 void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
 
-  if (millis() - lastMagnometerRead > 5) {
-    lastMagnometerRead = millis();
-    for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
-    {
-      magnometers[i]->Calculate();
+  if (millis() - lastMagnometerRead >= MAGNOMETER_READ_INTERVAL) {
+    if (millis() - lastMagnometerRead < 20) {
+      for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
+      {
+        magnometers[i]->Calculate();
+      }
     }
+    else {
+      Serial.println("Spent too much time, resetting magnometer read");
+      for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
+      {
+        magnometers[i]->ResetCalculations();
+      }
+    }
+    
+    
+    lastMagnometerRead = millis();
   }
 
 
@@ -813,12 +828,17 @@ void loop()
     
     for(int i = 0; i < sizeof(magnometers)/sizeof(magnometers[0]); i++)
     {
-      String line = magnometers[i]->Name + ',' + String(magnometers[i]->GetTotalXDelta()) + ',' + String(magnometers[i]->GetTotalYDelta()) + ',' + String(magnometers[i]->GetTotalZDelta());
-      unsigned char *hash = MD5::make_hash((char*)line.c_str());
-      char *md5str = MD5::make_digest(hash, 16);
-      line += ',' + String(md5str) + '\n';
-      free(hash);
-      free(md5str);
+      char line[300];
+      sprintf(line, "%s, x: %d, y: %d, z: %d, cnt: %d, StartFree: %d, CurrentFree: %d, %% Avail: %d", magnometers[i]->Name.c_str(), magnometers[i]->GetTotalXDelta(), magnometers[i]->GetTotalYDelta(), 
+        magnometers[i]->GetTotalZDelta(), magnometers[i]->GetSampleCount(), 
+        startingAvailableMemory, system_get_free_heap_size(), startingAvailableMemory ? (int) ((((float)system_get_free_heap_size()/(float)startingAvailableMemory))*100.0) : 0);
+        
+      //String line = magnometers[i]->Name + ',' + String(magnometers[i]->GetTotalXDelta()) + ',' + String(magnometers[i]->GetTotalYDelta()) + ',' + String(magnometers[i]->GetTotalZDelta());
+      //unsigned char *hash = MD5::make_hash((char*)line.c_str());
+      //char *md5str = MD5::make_digest(hash, 16);
+      //line += ',' + String(md5str) + '\n';
+      //free(hash);
+      //free(md5str);
       if (wifiConnected) {
         if (timeStatus() == timeNotSet  || publishKeepAlive) {
           publishKeepAlive = false;
@@ -830,13 +850,15 @@ void loop()
 
       if (timeStatus() != timeNotSet)
       {
-        if (magnometers[i]->AddToMetrics())
+        if (magnometers[i]->AddToMetrics()) {
+          Serial.println("New rollups calculated, publishing next");
           newRollupsCreated = true;
+        }
       }
       else
         Serial.println("Skipping adding metrics because time not set");
       
-      mySerial.print(line);
+      //mySerial.print(line);
       Serial.println(line);
       magnometers[i]->ResetCalculations();
     } 
@@ -854,7 +876,7 @@ void loop()
         unsigned int startPublishTime = millis();
         PublishMetricsToWifi();
 
-        if (system_get_free_heap_size() / startingAvailableMemory <= 0.25) {
+        if ((float)system_get_free_heap_size() / (float)startingAvailableMemory <= 0.25) {
           ESP.reset();
         }
 
@@ -864,6 +886,7 @@ void loop()
           {
             magnometers[i]->ResetCalculations();
           }
+          lastMagnometerRead = millis()-MAGNOMETER_READ_INTERVAL;
           previousPublishMs = millis();
           publishKeepAlive = true;
         }

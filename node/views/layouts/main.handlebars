@@ -27,21 +27,24 @@
 	webSocket.listen(function(message) {
 		console.log(message.text);
 		//realTimeData = $.parseJSON(message.text);
-		if ($('#realtime_text_Mag3110').length > 0) {
+		if ($('#realtime_text_Mag9Dof').length > 0) {
 			lastUpdate = new Date();
 			setRealTimeText(message);
 		}
 	});
 	
 	var dailySprinklerAnalysis = {};
+	var consolidatedSprinklerData = {};
 	var comparativeChart;
 	
 	function buildSprinklerAnalysis() {
+		consolidatedSprinklerData = {};
 		var processedFiles = 0;
+		var loadedFiles = 0;
 		for(var i = 0; i < availableFiles.length; i++) {
 			if (availableFiles[i].indexOf('Mag9Dof-XYZ') > 0) {
 				$.getJSON('data/' + availableFiles[i], function(waterData) {
-					buildSprinklerAnalysisFromData(waterData);
+					buildSprinklerAnalysisData(waterData);
 				}).done(function() {
 					console.log( "second success" );
 				})
@@ -50,6 +53,10 @@
 				})
 				.always(function() {
 					console.log( "complete" );
+					loadedFiles = loadedFiles + 1;
+					if (loadedFiles > 10) {
+						buildSprinklerAnalysisFromData();
+					}
 				});			
 				processedFiles = processedFiles + 1;
 			}
@@ -58,31 +65,36 @@
 			}
 		}
 	}
-	
-	function buildSprinklerAnalysisFromData(waterData) {
-	
-	
-		consolidatedData = {}
+
+	function buildSprinklerAnalysisData(waterData) {
 		for (var index = 0; index < waterData.WaterStats.WaterStat.length; index++)	{
 			row = waterData.WaterStats.WaterStat[index];
+			if (!row.localTime) {
+				var localTime = new Date(row.startTimeEpoch*1000);
+				row.localTime = moment(localTime).format("YYYY-MM-DD HH:mm:ss");
+			}			
 			if (row.interval == 900) {
-				if (!consolidatedData[row.localTime]) {
-					consolidatedData[row.localTime] = { localTime: row.localTime, x: 0, y: 0, z: 0 };
+				if (!consolidatedSprinklerData[row.localTime]) {
+					consolidatedSprinklerData[row.localTime] = { localTime: row.localTime, x: 0, y: 0, z: 0 };
 				}
 				if (row.name=="X") {
-					consolidatedData[row.localTime].x = row.adjustedAverage;
+					consolidatedSprinklerData[row.localTime].x = row.adjustedAverage;
 				}
 				else if (row.name=="Y") {
-					consolidatedData[row.localTime].y = row.adjustedAverage;
+					consolidatedSprinklerData[row.localTime].y = row.adjustedAverage;
 				}
 				else if (row.name=="Z") {
-					consolidatedData[row.localTime].z = row.adjustedAverage;
+					consolidatedSprinklerData[row.localTime].z = row.adjustedAverage;
 				}
 			}
 		}
+	}
+
+	
+	function buildSprinklerAnalysisFromData() {
 		
 		sortedDates = []
-		for(key in consolidatedData){
+		for(key in consolidatedSprinklerData){
 			sortedDates.push(key);
 		}
 		
@@ -99,9 +111,7 @@
 			}
 			
 			 if (!dateOnly.isSame(currentDate, 'day') || index == sortedDates.length - 1) {
-				if (countForDate >= (24*60/15-5)) {
-					includedDates[dateOnly]=dateOnly;
-				}
+				includedDates[dateOnly]=dateOnly;
 				countForDate=0;
 				currentDate = dateOnly;
 			}
@@ -126,7 +136,7 @@
 							dailySprinklerAnalysis[rowDateKey].sprinklers[sprinklerSchedule[i].name]= {x: 0, y: 0, z: 0};
 						}
 					}
-					var row = consolidatedData[sortedDates[index]];
+					var row = consolidatedSprinklerData[sortedDates[index]];
 					for(var i = 0; i < sprinklerSchedule.length; i++) {
 						var sprinkler = sprinklerSchedule[i];
 						var rowDate = safariCompatibleDateTimeParse(row.localTime);
@@ -158,7 +168,7 @@
 			var chartRow=[comparativeRow.comparativeDate];
 			for(var i = 0; i < sprinklerSchedule.length; i++) {
 				var sprinklerData = comparativeRow.sprinklers[sprinklerSchedule[i].name];
-				chartRow.push(sprinklerData.x); 
+				chartRow.push(sprinklerData.z); 
 			}
 			data.addRows([chartRow]);
 		}
@@ -182,7 +192,7 @@
 { name: 'Right Front', valve: 2, controller: 'Tool Room', durationMinutes: 15, startTime: '23:00', endTime: '23:15', days: 'Sun' }]
 	
 	setInterval(function() {
-		if ($('#realtime_text_Mag3110').length > 0) {
+		if ($('#realtime_text_Mag9Dof').length > 0) {
 			var nowDate = new Date();
 			if ((nowDate - lastUpdate)/1000 > 6) {
 				lastUpdate = new Date();
@@ -215,29 +225,33 @@
 		return 	realTimeChartOptions	
 	}
 	function setRealTimeText(message) {
+		var dt = new Date(message.lastUpdateTime);
 	
 		$('#realtime_text_'+message.magName).text(message.magName + ' x: ' + Math.round(message.x) + ' y: ' + Math.round(message.y) + ' z: ' + Math.round(message.z) + " Sample Count: "+ message.sampleCount);
-		
-		var dt = new Date();
-		realtimeData = realTimeDatas[message.magName];
-		var chartRow = [dt.getHours().pad() + ':' + dt.getMinutes().pad() + ':' + dt.getSeconds().pad()];
-		chartRow.push(parseInt(message.x));
-		chartRow.push(parseInt(message.y));
-		chartRow.push(parseInt(message.z));
-		
-		realtimeData.addRows([chartRow]);
-		while (realtimeData.getNumberOfRows() > 20) {
-			realtimeData.removeRow(0);
+		$('#realtime_text_stats_'+message.magName).text('Last Update Time: ' + (dt.getMonth()+1) + '-' + dt.getDate().pad()  + ' ' + dt.getHours().pad() + ':' + dt.getMinutes().pad() + ':' + dt.getSeconds().pad() + ' Wifi Uptime: ' + message.wifiUpTimePct + '% Hours Up: ' + message.upTimeHours + ' Publish Error Count: ' + message.publishErrorCount + " Free Memory: "+ message.freeMemory);
+
+		if (!realTimeDatas[message.magName].lastUpdateTime || realTimeDatas[message.magName].lastUpdateTime.getTime() != dt.getTime()) {
+			realtimeData = realTimeDatas[message.magName];
+			realTimeDatas[message.magName].lastUpdateTime = dt;
+			var chartRow = [dt.getHours().pad() + ':' + dt.getMinutes().pad() + ':' + dt.getSeconds().pad()];
+			chartRow.push(parseInt(message.x));
+			chartRow.push(parseInt(message.y));
+			chartRow.push(parseInt(message.z));
+			
+			realtimeData.addRows([chartRow]);
+			while (realtimeData.getNumberOfRows() > 20) {
+				realtimeData.removeRow(0);
+			}
+			
+			if (!realTimeCharts[message.magName]) {
+				// Instantiate and draw our chart, passing in some options.
+				realTimeCharts[message.magName] = new google.visualization.ColumnChart(document.getElementById('realtime_chart_'+message.magName));
+			}
+			// Set chart options
+			var realTimeChartOptions = createRealTimeChartStyle();
+			
+			realTimeCharts[message.magName].draw(buildRealTimeDataView(realtimeData), realTimeChartOptions);	
 		}
-		
-		if (!realTimeCharts[message.magName]) {
-			// Instantiate and draw our chart, passing in some options.
-			realTimeCharts[message.magName] = new google.visualization.ColumnChart(document.getElementById('realtime_chart_'+message.magName));
-		}
-		// Set chart options
-		var realTimeChartOptions = createRealTimeChartStyle();
-		
-		realTimeCharts[message.magName].draw(buildRealTimeDataView(realtimeData), realTimeChartOptions);	
 	}
 	
 	function buildRealTimeDataView(dataTable) {
@@ -376,7 +390,7 @@ var lastJsonFile;
 			momentSprinklerEndDateTime.add(sprinkler.durationMinutes, 'm');
 			
 			if ((momentRowDate.isAfter(momentSprinklerStartDateTime) || momentRowDate.isSame(momentSprinklerStartDateTime, 'second'))  
-			&&  (momentRowDate.isBefore(momentSprinklerEndDateTime) || momentRowDate.isSame(momentSprinklerEndDateTime, 'second')))
+			&&  (momentRowDate.isBefore(momentSprinklerEndDateTime)))
 			{
 				return true;
 			}
@@ -646,6 +660,7 @@ function redrawCharts() {
 				  <h4>Mag3110</h4>
 				  <div class="text-muted">Realtime Readings</div>
 						<p id="realtime_text_Mag3110">Waiting for Mag3110  device data</p>
+						<p id="realtime_text_stats_Mag3110">Waiting for Mag3110  device data</p>
 				</div>
 				<div class="col-6 col-sm-5 placeholder">
 				  <div id = "realtime_chart_Mag9Dof" width="600" height="300">
@@ -653,6 +668,7 @@ function redrawCharts() {
 				  <h4>Mag9DOF</h4>
 				  <div class="text-muted">Realtime Readings</div>
 						<p id="realtime_text_Mag9Dof">Waiting for 9Dof device data</p>
+						<p id="realtime_text_stats_Mag9Dof">Waiting for 9Dof device data</p>
 				</div>
 			  </section>
 
